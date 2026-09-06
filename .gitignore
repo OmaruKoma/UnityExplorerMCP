@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.dll
+*.pdb
+*.exe
+*.cache
+.vs/
+bin/
+obj/
+UnityExplorer/
+*.env
