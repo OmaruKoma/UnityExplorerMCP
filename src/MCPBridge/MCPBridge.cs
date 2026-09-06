@@ -10,6 +10,8 @@ using System.Threading;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using Il2CppInterop.Runtime.Injection;
+using Il2CppInterop.Runtime;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 
 namespace UnityExplorer.MCPBridge
@@ -324,9 +326,21 @@ namespace UnityExplorer.MCPBridge
         
         private MCPResponse HandleFindGameObjects(MCPRequest request)
         {
-            var parameters = request.Params as FindGameObjectsParams;
-            string name = parameters != null ? parameters.Name : null;
-            bool includeInactive = parameters != null ? parameters.IncludeInactive : true;
+            string name = null;
+            bool includeInactive = true;
+            
+            if (request.Params is FindGameObjectsParams p)
+            {
+                name = p.Name;
+                includeInactive = p.IncludeInactive;
+            }
+            else if (request.Params is System.Text.Json.JsonElement j)
+            {
+                if (j.TryGetProperty("name", out var nameProp) || j.TryGetProperty("Name", out nameProp))
+                    name = nameProp.GetString();
+                if (j.TryGetProperty("include_inactive", out var inactiveProp) || j.TryGetProperty("IncludeInactive", out inactiveProp))
+                    includeInactive = inactiveProp.GetBoolean();
+            }
             
             var results = new List<GameObjectInfo>();
             var allObjects = Resources.FindObjectsOfTypeAll<GameObject>();
@@ -362,8 +376,16 @@ namespace UnityExplorer.MCPBridge
         
         private MCPResponse HandleGetGameObject(MCPRequest request)
         {
-            var parameters = request.Params as GetGameObjectParams;
-            int instanceId = parameters != null ? parameters.InstanceId : 0;
+            int instanceId = 0;
+            if (request.Params is GetGameObjectParams p)
+            {
+                instanceId = p.InstanceId;
+            }
+            else if (request.Params is System.Text.Json.JsonElement j)
+            {
+                if (j.TryGetProperty("instance_id", out var idProp) || j.TryGetProperty("InstanceId", out idProp))
+                    instanceId = idProp.GetInt32();
+            }
             
             var obj = FindObjectById(instanceId) as GameObject;
             if (obj == null)
@@ -410,8 +432,16 @@ namespace UnityExplorer.MCPBridge
         
         private MCPResponse HandleGetComponents(MCPRequest request)
         {
-            var parameters = request.Params as GetComponentsParams;
-            int instanceId = parameters != null ? parameters.InstanceId : 0;
+            int instanceId = 0;
+            if (request.Params is GetComponentsParams p)
+            {
+                instanceId = p.InstanceId;
+            }
+            else if (request.Params is System.Text.Json.JsonElement j)
+            {
+                if (j.TryGetProperty("instance_id", out var idProp) || j.TryGetProperty("InstanceId", out idProp))
+                    instanceId = idProp.GetInt32();
+            }
             
             var obj = FindObjectById(instanceId) as GameObject;
             if (obj == null)
@@ -423,9 +453,9 @@ namespace UnityExplorer.MCPBridge
                 if (comp == null) continue;
                 bool? enabled = null;
                 if (comp is Behaviour) enabled = ((Behaviour)comp).enabled;
-                components.Add(new ComponentInfo
+components.Add(new ComponentInfo
                 {
-                    TypeName = comp.GetType().FullName,
+                    TypeName = GetIl2CppTypeName(comp),
                     InstanceId = comp.GetInstanceID(),
                     Enabled = enabled
                 });
@@ -436,19 +466,15 @@ namespace UnityExplorer.MCPBridge
         
         private MCPResponse HandleInspect(MCPRequest request)
         {
-            var parameters = request.Params as InspectParams;
-            int instanceId = parameters != null ? parameters.InstanceId : 0;
+            int instanceId = ExtractInstanceId(request);
             
             var obj = FindObjectById(instanceId);
             if (obj == null)
                 return new MCPResponse { Success = false, Error = "Object not found" };
             
-            var type = obj.GetType();
-            BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static;
-            
             var info = new InspectResponse
             {
-                TypeName = type.FullName,
+                TypeName = "",
                 InstanceId = obj.GetInstanceID(),
                 Fields = new List<MemberInfoItem>(),
                 Properties = new List<MemberInfoItem>(),
@@ -457,76 +483,162 @@ namespace UnityExplorer.MCPBridge
             
             try
             {
-                foreach (var field in type.GetFields(flags))
+                if (obj is Component comp)
                 {
-                    try
+                    IntPtr klass = IL2CPP.il2cpp_object_get_class(comp.Pointer);
+                    info.TypeName = Marshal.PtrToStringAnsi(IL2CPP.il2cpp_class_get_name(klass));
+                    
+                    IntPtr iter = IntPtr.Zero;
+                    IntPtr field;
+                    while ((field = IL2CPP.il2cpp_class_get_fields(klass, ref iter)) != IntPtr.Zero)
                     {
-                        object value = field.GetValue(field.IsStatic ? null : obj);
-                        info.Fields.Add(new MemberInfoItem
+                        try
                         {
-                            Name = field.Name,
-                            TypeName = field.FieldType.FullName,
-                            Value = value != null ? value.ToString() : "null",
-                            IsStatic = field.IsStatic,
-                            CanWrite = !(field.IsLiteral && !field.IsInitOnly)
-                        });
-                    }
-                    catch { }
-                }
-                
-                foreach (var prop in type.GetProperties(flags))
-                {
-                    try
-                    {
-                        object value = null;
-                        if (prop.CanRead)
-                        {
-                            var getter = prop.GetGetMethod(true);
-                            if (getter != null) value = prop.GetValue(getter.IsStatic ? null : obj, null);
+                            string fieldName = Marshal.PtrToStringAnsi(IL2CPP.il2cpp_field_get_name(field));
+                            IntPtr fieldType = IL2CPP.il2cpp_field_get_type(field);
+                            string fieldTypeName = Marshal.PtrToStringAnsi(IL2CPP.il2cpp_type_get_name(fieldType));
+                            
+                            string value = "N/A";
+                            bool isStatic = (IL2CPP.il2cpp_field_get_flags(field) & 0x0010) != 0;
+                            
+                            // Only read values for safe types to avoid crashes
+                            bool isSafeType = fieldTypeName.StartsWith("System.") && 
+                                (fieldTypeName == "System.Int32" || fieldTypeName == "System.Single" || 
+                                 fieldTypeName == "System.Boolean" || fieldTypeName == "System.String" ||
+                                 fieldTypeName == "System.Int64" || fieldTypeName == "System.Double");
+                            
+                            if (isSafeType)
+                            {
+                                try
+                                {
+                                    IntPtr valuePtr = Marshal.AllocHGlobal(8);
+                                    unsafe
+                                    {
+                                        if (isStatic)
+                                            IL2CPP.il2cpp_field_static_get_value(field, (void*)valuePtr);
+                                        else
+                                            IL2CPP.il2cpp_field_get_value(comp.Pointer, field, (void*)valuePtr);
+                                    }
+                                    
+                                    value = FormatFieldValue(valuePtr, fieldTypeName);
+                                    Marshal.FreeHGlobal(valuePtr);
+                                }
+                                catch { }
+                            }
+                            
+                            info.Fields.Add(new MemberInfoItem
+                            {
+                                Name = fieldName,
+                                TypeName = fieldTypeName,
+                                Value = value,
+                                IsStatic = isStatic,
+                                CanWrite = true
+                            });
                         }
-                        info.Properties.Add(new MemberInfoItem
-                        {
-                            Name = prop.Name,
-                            TypeName = prop.PropertyType.FullName,
-                            Value = value != null ? value.ToString() : "null",
-                            IsStatic = prop.GetAccessors(true)[0].IsStatic,
-                            CanWrite = prop.CanWrite
-                        });
+                        catch { }
                     }
-                    catch { }
-                }
-                
-                foreach (var method in type.GetMethods(flags))
-                {
-                    if (method.Name.StartsWith("get_") || method.Name.StartsWith("set_")) continue;
-                    if (method.DeclaringType != type) continue;
                     
-                    var paramList = new List<ParameterInfoItem>();
-                    foreach (var p in method.GetParameters())
-                        paramList.Add(new ParameterInfoItem { Name = p.Name, TypeName = p.ParameterType.FullName });
-                    
-                    info.Methods.Add(new MethodInfoItem
+                    iter = IntPtr.Zero;
+                    IntPtr method;
+                    while ((method = IL2CPP.il2cpp_class_get_methods(klass, ref iter)) != IntPtr.Zero)
                     {
-                        Name = method.Name,
-                        ReturnType = method.ReturnType.FullName,
-                        Parameters = paramList,
-                        IsStatic = method.IsStatic
-                    });
+                        try
+                        {
+                            string methodName = Marshal.PtrToStringAnsi(IL2CPP.il2cpp_method_get_name(method));
+                            if (string.IsNullOrEmpty(methodName) || methodName.StartsWith(".")) continue;
+                            
+                            uint paramCount = IL2CPP.il2cpp_method_get_param_count(method);
+                            var paramTypes = new List<string>();
+                            for (uint i = 0; i < paramCount; i++)
+                            {
+                                IntPtr paramType = IL2CPP.il2cpp_method_get_param(method, i);
+                                paramTypes.Add(Marshal.PtrToStringAnsi(IL2CPP.il2cpp_type_get_name(paramType)));
+                            }
+                            
+                            IntPtr returnType = IL2CPP.il2cpp_method_get_return_type(method);
+                            string returnTypeName = Marshal.PtrToStringAnsi(IL2CPP.il2cpp_type_get_name(returnType));
+                            
+                            info.Methods.Add(new MethodInfoItem
+                            {
+                                Name = methodName,
+                                ReturnType = returnTypeName,
+                                Parameters = paramTypes.Select(t => new ParameterInfoItem { Name = "", TypeName = t }).ToList(),
+                                IsStatic = false
+                            });
+                        }
+                        catch { }
+                    }
+                }
+                else
+                {
+                    var type = obj.GetType();
+                    info.TypeName = type.FullName;
+                    BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static;
+                    
+                    foreach (var field in type.GetFields(flags))
+                    {
+                        try
+                        {
+                            object value = field.GetValue(field.IsStatic ? null : obj);
+                            info.Fields.Add(new MemberInfoItem
+                            {
+                                Name = field.Name,
+                                TypeName = field.FieldType.FullName,
+                                Value = value != null ? value.ToString() : "null",
+                                IsStatic = field.IsStatic,
+                                CanWrite = !(field.IsLiteral && !field.IsInitOnly)
+                            });
+                        }
+                        catch { }
+                    }
                 }
             }
             catch (Exception ex)
             {
-                return new MCPResponse { Success = false, Error = "Inspection error: " + ex.Message };
+                info.Fields.Add(new MemberInfoItem { Name = "Error", TypeName = "string", Value = ex.Message, IsStatic = false, CanWrite = false });
             }
             
             return new MCPResponse { Success = true, Data = info };
         }
         
+        private string FormatFieldValue(IntPtr valuePtr, string typeName)
+        {
+            if (valuePtr == IntPtr.Zero) return "null";
+            
+            try
+            {
+                switch (typeName.ToLower())
+                {
+                    case "system.int32":
+                    case "int":
+                        return Marshal.ReadInt32(valuePtr).ToString();
+                    case "system.int64":
+                    case "long":
+                        return Marshal.ReadInt64(valuePtr).ToString();
+                    case "system.single":
+                    case "float":
+                        return BitConverter.ToSingle(BitConverter.GetBytes(Marshal.ReadInt32(valuePtr)), 0).ToString();
+                    case "system.double":
+                        return BitConverter.ToDouble(BitConverter.GetBytes(Marshal.ReadInt64(valuePtr)), 0).ToString();
+                    case "system.boolean":
+                    case "bool":
+                        return (Marshal.ReadByte(valuePtr) != 0).ToString();
+                    case "system.string":
+                        IntPtr strPtr = Marshal.ReadIntPtr(valuePtr);
+                        if (strPtr == IntPtr.Zero) return "null";
+                        return Marshal.PtrToStringAnsi(strPtr);
+                    default:
+                        IntPtr objPtr = Marshal.ReadIntPtr(valuePtr);
+                        if (objPtr == IntPtr.Zero) return "null";
+                        return $"[Object @ {objPtr}]";
+                }
+            }
+            catch { return "N/A"; }
+        }
         private MCPResponse HandleGetField(MCPRequest request)
         {
-            var parameters = request.Params as GetFieldParams;
-            int instanceId = parameters != null ? parameters.InstanceId : 0;
-            string fieldName = parameters != null ? parameters.Field : null;
+            int instanceId = ExtractInstanceId(request);
+            string fieldName = ExtractString(request, "field") ?? ExtractString(request, "Field");
             
             var obj = FindObjectById(instanceId);
             if (obj == null)
@@ -547,10 +659,9 @@ namespace UnityExplorer.MCPBridge
         
         private MCPResponse HandleSetField(MCPRequest request)
         {
-            var parameters = request.Params as SetFieldParams;
-            int instanceId = parameters != null ? parameters.InstanceId : 0;
-            string fieldName = parameters != null ? parameters.Field : null;
-            object valueObj = parameters != null ? parameters.Value : null;
+            int instanceId = ExtractInstanceId(request);
+            string fieldName = ExtractString(request, "field") ?? ExtractString(request, "Field");
+            object valueObj = ExtractValue(request, "value") ?? ExtractValue(request, "Value");
             
             var obj = FindObjectById(instanceId);
             if (obj == null)
@@ -572,9 +683,8 @@ namespace UnityExplorer.MCPBridge
         
         private MCPResponse HandleGetProperty(MCPRequest request)
         {
-            var parameters = request.Params as GetPropertyParams;
-            int instanceId = parameters != null ? parameters.InstanceId : 0;
-            string propertyName = parameters != null ? parameters.Property : null;
+            int instanceId = ExtractInstanceId(request);
+            string propertyName = ExtractString(request, "property") ?? ExtractString(request, "Property");
             
             var obj = FindObjectById(instanceId);
             if (obj == null)
@@ -598,10 +708,9 @@ namespace UnityExplorer.MCPBridge
         
         private MCPResponse HandleSetProperty(MCPRequest request)
         {
-            var parameters = request.Params as SetPropertyParams;
-            int instanceId = parameters != null ? parameters.InstanceId : 0;
-            string propertyName = parameters != null ? parameters.Property : null;
-            object valueObj = parameters != null ? parameters.Value : null;
+            int instanceId = ExtractInstanceId(request);
+            string propertyName = ExtractString(request, "property") ?? ExtractString(request, "Property");
+            object valueObj = ExtractValue(request, "value") ?? ExtractValue(request, "Value");
             
             var obj = FindObjectById(instanceId);
             if (obj == null)
@@ -625,14 +734,42 @@ namespace UnityExplorer.MCPBridge
         
         private MCPResponse HandleInvokeMethod(MCPRequest request)
         {
-            var parameters = request.Params as InvokeMethodParams;
-            int instanceId = parameters != null ? parameters.InstanceId : 0;
-            string typeName = parameters != null ? parameters.Type : null;
-            string methodName = parameters != null ? parameters.Method : null;
-            object[] args = parameters != null ? parameters.Args : null;
+            int instanceId = ExtractInstanceId(request);
+            string typeName = ExtractString(request, "type") ?? ExtractString(request, "Type");
+            string methodName = ExtractString(request, "method") ?? ExtractString(request, "Method");
+            object[] args = null;
+            if (request.Params is System.Text.Json.JsonElement j)
+            {
+                if (j.TryGetProperty("args", out var argsProp) || j.TryGetProperty("Args", out argsProp))
+                {
+                    if (argsProp.ValueKind == System.Text.Json.JsonValueKind.Array)
+                    {
+                        var argList = new System.Collections.Generic.List<object>();
+                        foreach (var item in argsProp.EnumerateArray())
+                        {
+                            if (item.ValueKind == System.Text.Json.JsonValueKind.String)
+                                argList.Add(item.GetString());
+                            else if (item.ValueKind == System.Text.Json.JsonValueKind.Number)
+                                argList.Add(item.GetDouble());
+                            else if (item.ValueKind == System.Text.Json.JsonValueKind.True)
+                                argList.Add(true);
+                            else if (item.ValueKind == System.Text.Json.JsonValueKind.False)
+                                argList.Add(false);
+                            else
+                                argList.Add(null);
+                        }
+                        args = argList.ToArray();
+                    }
+                }
+            }
             
             UnityEngine.Object obj = null;
             if (instanceId != 0) obj = FindObjectById(instanceId);
+            
+            if (obj is Component comp)
+            {
+                return InvokeIl2CppMethod(comp, methodName, args);
+            }
             
             Type type = null;
             if (obj != null) type = obj.GetType();
@@ -711,6 +848,180 @@ namespace UnityExplorer.MCPBridge
         
         #region Utility Methods
         
+        private int ExtractInstanceId(MCPRequest request)
+        {
+            if (request.Params is System.Text.Json.JsonElement j)
+            {
+                if (j.TryGetProperty("instance_id", out var idProp) || j.TryGetProperty("InstanceId", out idProp))
+                    return idProp.GetInt32();
+            }
+            return 0;
+        }
+        
+        private string ExtractString(MCPRequest request, string propName)
+        {
+            if (request.Params is System.Text.Json.JsonElement j)
+            {
+                if (j.TryGetProperty(propName, out var prop))
+                    return prop.GetString();
+            }
+            return null;
+        }
+        
+        private object ExtractValue(MCPRequest request, string propName)
+        {
+            if (request.Params is System.Text.Json.JsonElement j)
+            {
+                if (j.TryGetProperty(propName, out var prop))
+                {
+                    if (prop.ValueKind == System.Text.Json.JsonValueKind.String)
+                        return prop.GetString();
+                    if (prop.ValueKind == System.Text.Json.JsonValueKind.Number)
+                        return prop.GetDouble();
+                    if (prop.ValueKind == System.Text.Json.JsonValueKind.True)
+                        return true;
+                    if (prop.ValueKind == System.Text.Json.JsonValueKind.False)
+                        return false;
+                    if (prop.ValueKind == System.Text.Json.JsonValueKind.Null)
+                        return null;
+                }
+            }
+            return null;
+        }
+        
+        private string GetIl2CppTypeName(Component comp)
+        {
+            try
+            {
+                var il2cppClass = IL2CPP.il2cpp_object_get_class(comp.Pointer);
+                var namePtr = IL2CPP.il2cpp_class_get_name(il2cppClass);
+                return Marshal.PtrToStringAnsi(namePtr);
+            }
+            catch { return comp.GetType().Name; }
+        }
+        
+        private MCPResponse InvokeIl2CppMethod(Component comp, string methodName, object[] args)
+        {
+            try
+            {
+                IntPtr klass = IL2CPP.il2cpp_object_get_class(comp.Pointer);
+                IntPtr iter = IntPtr.Zero;
+                IntPtr method = IntPtr.Zero;
+                
+                while ((method = IL2CPP.il2cpp_class_get_methods(klass, ref iter)) != IntPtr.Zero)
+                {
+                    string name = Marshal.PtrToStringAnsi(IL2CPP.il2cpp_method_get_name(method));
+                    if (name == methodName)
+                    {
+                        uint paramCount = IL2CPP.il2cpp_method_get_param_count(method);
+                        if ((args == null && paramCount == 0) || (args != null && args.Length == paramCount))
+                        {
+                            unsafe
+                            {
+                                IntPtr exc = IntPtr.Zero;
+                                void** paramsPtr = null;
+                                
+                                if (args != null && args.Length > 0)
+                                {
+                                    paramsPtr = (void**)Marshal.AllocHGlobal(args.Length * IntPtr.Size);
+                                    for (int i = 0; i < args.Length; i++)
+                                    {
+                                        IntPtr paramType = IL2CPP.il2cpp_method_get_param(method, (uint)i);
+                                        string paramTypeName = Marshal.PtrToStringAnsi(IL2CPP.il2cpp_type_get_name(paramType));
+                                        paramsPtr[i] = (void*)ConvertArgToIl2Cpp(args[i], paramTypeName);
+                                    }
+                                }
+                                
+                                IntPtr result = IL2CPP.il2cpp_runtime_invoke(method, comp.Pointer, paramsPtr, ref exc);
+                                
+                                if (args != null && args.Length > 0)
+                                {
+                                    Marshal.FreeHGlobal((IntPtr)paramsPtr);
+                                }
+                                
+                                if (exc != IntPtr.Zero)
+                                {
+                                    return new MCPResponse { Success = false, Error = "IL2CPP Exception occurred" };
+                                }
+                                
+                                string returnType = Marshal.PtrToStringAnsi(IL2CPP.il2cpp_type_get_name(IL2CPP.il2cpp_method_get_return_type(method)));
+                                string resultStr = FormatIl2CppResult(result, returnType);
+                                
+                                return new MCPResponse { Success = true, Data = new { Method = methodName, Result = resultStr } };
+                            }
+                        }
+                    }
+                }
+                
+                return new MCPResponse { Success = false, Error = "Method not found: " + methodName };
+            }
+            catch (Exception ex)
+            {
+                return new MCPResponse { Success = false, Error = "IL2CPP invoke error: " + ex.Message };
+            }
+        }
+        
+        private unsafe IntPtr ConvertArgToIl2Cpp(object value, string typeName)
+        {
+            IntPtr ptr = Marshal.AllocHGlobal(8);
+            
+            switch (typeName.ToLower())
+            {
+                case "system.int32":
+                case "int":
+                    Marshal.WriteInt32(ptr, Convert.ToInt32(value));
+                    break;
+                case "system.single":
+                case "float":
+                    float f = Convert.ToSingle(value);
+                    Marshal.WriteInt32(ptr, BitConverter.ToInt32(BitConverter.GetBytes(f), 0));
+                    break;
+                case "system.boolean":
+                case "bool":
+                    Marshal.WriteByte(ptr, Convert.ToBoolean(value) ? (byte)1 : (byte)0);
+                    break;
+                case "system.double":
+                    double d = Convert.ToDouble(value);
+                    Marshal.WriteInt64(ptr, BitConverter.ToInt64(BitConverter.GetBytes(d), 0));
+                    break;
+                case "system.string":
+                    IntPtr strPtr = Marshal.StringToHGlobalAnsi(value?.ToString());
+                    Marshal.WriteIntPtr(ptr, strPtr);
+                    break;
+                default:
+                    Marshal.WriteInt32(ptr, 0);
+                    break;
+            }
+            
+            return ptr;
+        }
+        
+        private string FormatIl2CppResult(IntPtr result, string returnType)
+        {
+            if (result == IntPtr.Zero) return "null";
+            
+            switch (returnType.ToLower())
+            {
+                case "system.void":
+                    return "void";
+                case "system.int32":
+                case "int":
+                    return Marshal.ReadInt32(result).ToString();
+                case "system.single":
+                case "float":
+                    return BitConverter.ToSingle(BitConverter.GetBytes(Marshal.ReadInt32(result)), 0).ToString();
+                case "system.boolean":
+                case "bool":
+                    return (Marshal.ReadByte(result) != 0).ToString();
+                case "system.string":
+                    IntPtr strPtr = Marshal.ReadIntPtr(result);
+                    if (strPtr == IntPtr.Zero) return "null";
+                    return Marshal.PtrToStringAnsi(strPtr);
+                default:
+                    return $"[Object @ {result}]";
+            }
+        }
+        
         private UnityEngine.Object FindObjectById(int instanceId)
         {
             foreach (var obj in Resources.FindObjectsOfTypeAll<UnityEngine.Object>())
@@ -767,4 +1078,5 @@ namespace UnityExplorer.MCPBridge
         #endregion
     }
 }
+
 
