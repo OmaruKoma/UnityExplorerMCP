@@ -16,6 +16,9 @@ console.log('=== UnityExplorer MCP Integration Verification ===\n');
 const checks = [
   // MCP Bridge files
   { name: 'MCPBridge.cs', path: 'src\\MCPBridge\\MCPBridge.cs', required: true },
+  { name: 'CSharpExecutor.cs (P0)', path: 'src\\MCPBridge\\CSharpExecutor.cs', required: true },
+  { name: 'AssemblyInspector.cs (P1)', path: 'src\\MCPBridge\\AssemblyInspector.cs', required: true },
+  { name: 'ValueSerializer.cs (P3)', path: 'src\\MCPBridge\\ValueSerializer.cs', required: true },
   { name: 'MCPBridgePlugin.cs', path: 'src\\MCPBridge\\MCPBridgePlugin.cs', required: true },
   { name: 'MCPBridgeMod.cs', path: 'src\\MCPBridge\\MCPBridgeMod.cs', required: true },
   { name: 'DTO.cs', path: 'src\\MCPBridge\\DTO.cs', required: true },
@@ -24,6 +27,8 @@ const checks = [
   
   // MCP Server files
   { name: 'server.ts', path: 'mcp-server\\src\\server.ts', required: true },
+  { name: 'logTail.ts (P2)', path: 'mcp-server\\src\\logTail.ts', required: true },
+  { name: 'Compiled logTail.js (P2)', path: 'mcp-server\\dist\\logTail.js', required: true },
   { name: 'package.json', path: 'mcp-server\\package.json', required: true },
   { name: 'tsconfig.json', path: 'mcp-server\\tsconfig.json', required: true },
   { name: 'Compiled server.js', path: 'mcp-server\\dist\\server.js', required: true },

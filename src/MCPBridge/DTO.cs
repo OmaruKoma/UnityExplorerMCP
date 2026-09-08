@@ -94,6 +94,33 @@ namespace UnityExplorer.MCPBridge
     public class ExecuteCSharpParams
     {
         public string Code { get; set; }
+        public int TimeoutMs { get; set; } = 30000;
+        public string ReturnEncoding { get; set; } = "hex";
+    }
+
+    public class ListAssembliesParams
+    {
+        public string Filter { get; set; }
+    }
+
+    public class InspectTypeParams
+    {
+        public string Assembly { get; set; }
+        public string Type { get; set; }
+    }
+
+    public class InvokeStaticParams
+    {
+        public string Type { get; set; }
+        public string Assembly { get; set; }
+        public string Method { get; set; }
+        public object[] Args { get; set; }
+        public string ReturnEncoding { get; set; } = "hex";
+    }
+
+    public class ResolvePathParams
+    {
+        public string Path { get; set; }
     }
     
     // Response Data Models
@@ -103,12 +130,14 @@ namespace UnityExplorer.MCPBridge
         public string Status { get; set; }
         public string UnityVersion { get; set; }
         public string BridgeVersion { get; set; }
+        public string SessionId { get; set; }
     }
-    
+
     public class SceneInfoResponse
     {
         public SceneInfo ActiveScene { get; set; }
         public List<SceneInfo> LoadedScenes { get; set; }
+        public string SessionId { get; set; }
     }
     
     public class SceneInfo

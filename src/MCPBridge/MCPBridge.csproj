@@ -60,6 +60,10 @@
       <HintPath>D:\F95 Game\aidealrays\Aidealrays_Ver_2.1\BepInEx\core\Il2CppInterop.Runtime.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <Reference Include="mcs">
+      <HintPath>..\..\UnityExplorer\lib\net6\mcs.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>

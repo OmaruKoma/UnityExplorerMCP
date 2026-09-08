@@ -8,6 +8,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import axios, { AxiosInstance } from "axios";
 import { z } from "zod";
+import { tailLog } from "./logTail.js";
 
 // Configuration
 const UNITY_BRIDGE_URL = process.env.UNITY_BRIDGE_URL || "http://127.0.0.1:12345";
@@ -318,8 +319,111 @@ class UnityExplorerMCPServer {
                   type: "string",
                   description: "C# code to execute",
                 },
+                returnEncoding: {
+                  type: "string",
+                  description: "byte[] return encoding: hex (default) or base64",
+                },
               },
               required: ["code"],
+            },
+          },
+          {
+            name: "unity_list_assemblies",
+            description: "List loaded assemblies in the Unity runtime (optional substring filter)",
+            inputSchema: {
+              type: "object",
+              properties: {
+                filter: {
+                  type: "string",
+                  description: "Optional case-insensitive substring filter on assembly name",
+                },
+              },
+              required: [],
+            },
+          },
+          {
+            name: "unity_inspect_type",
+            description: "Inspect a type by full name: fields/properties/methods with static/instance, param and return types",
+            inputSchema: {
+              type: "object",
+              properties: {
+                type: {
+                  type: "string",
+                  description: "Full type name (e.g. System.Math)",
+                },
+                assembly: {
+                  type: "string",
+                  description: "Optional assembly name to resolve the type from",
+                },
+              },
+              required: ["type"],
+            },
+          },
+          {
+            name: "unity_invoke_static",
+            description: "Invoke a static method by type and method name; out/ref params are returned in outArgs, byte[] honours returnEncoding",
+            inputSchema: {
+              type: "object",
+              properties: {
+                type: {
+                  type: "string",
+                  description: "Full type name (e.g. System.Math)",
+                },
+                method: {
+                  type: "string",
+                  description: "Static method name",
+                },
+                args: {
+                  type: "array",
+                  description: "Method arguments (use null placeholders for out/ref params, or omit pure-out params)",
+                  items: {},
+                },
+                assembly: {
+                  type: "string",
+                  description: "Optional assembly name to resolve the type from",
+                },
+                returnEncoding: {
+                  type: "string",
+                  description: "byte[] encoding: hex (default) or base64",
+                },
+              },
+              required: ["type", "method"],
+            },
+          },
+          {
+            name: "unity_resolve_path",
+            description: "Re-resolve a Hierarchy path (e.g. Root/Child) to a fresh instance_id after scene changes or restarts",
+            inputSchema: {
+              type: "object",
+              properties: {
+                path: {
+                  type: "string",
+                  description: "Hierarchy path (e.g. Player/Arm)",
+                },
+              },
+              required: ["path"],
+            },
+          },
+          {
+            name: "unity_tail_log",
+            description: "Read the tail of BepInEx LogOutput.log without locking the game (Windows shared-read)",
+            inputSchema: {
+              type: "object",
+              properties: {
+                path: {
+                  type: "string",
+                  description: "Game root dir or full log path (default auto-detects)",
+                },
+                lines: {
+                  type: "number",
+                  description: "Number of tail lines (default 100, max 2000)",
+                },
+                keyword: {
+                  type: "string",
+                  description: "Optional case-insensitive keyword filter",
+                },
+              },
+              required: [],
             },
           },
         ],
@@ -329,6 +433,25 @@ class UnityExplorerMCPServer {
     // Handle tool calls
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { name, arguments: args } = request.params;
+
+      // unity_tail_log is served locally from disk; works even when the game is down.
+      if (name === "unity_tail_log") {
+        try {
+          const logResult = await tailLog({
+            path: args?.path as string | undefined,
+            lines: (args?.lines as number | undefined) ?? 100,
+            keyword: args?.keyword as string | undefined,
+          });
+          return {
+            content: [{ type: "text", text: JSON.stringify(logResult, null, 2) }],
+          };
+        } catch (error: any) {
+          return {
+            content: [{ type: "text", text: `Error: ${error.message || "Unknown error"}` }],
+            isError: true,
+          };
+        }
+      }
 
       // Ensure bridge is connected
       if (!this.bridge.isConnected()) {
@@ -436,6 +559,36 @@ class UnityExplorerMCPServer {
           case "unity_execute_csharp":
             result = await this.bridge.request("execute_csharp", {
               code: args?.code,
+              returnEncoding: (args as any)?.returnEncoding ?? "hex",
+            });
+            break;
+
+          case "unity_list_assemblies":
+            result = await this.bridge.request("list_assemblies", {
+              filter: args?.filter,
+            });
+            break;
+
+          case "unity_inspect_type":
+            result = await this.bridge.request("inspect_type", {
+              type: args?.type,
+              assembly: args?.assembly,
+            });
+            break;
+
+          case "unity_invoke_static":
+            result = await this.bridge.request("invoke_static", {
+              type: args?.type,
+              assembly: (args as any)?.assembly,
+              method: args?.method,
+              args: args?.args,
+              returnEncoding: (args as any)?.returnEncoding ?? "hex",
+            });
+            break;
+
+          case "unity_resolve_path":
+            result = await this.bridge.request("resolve_path", {
+              path: args?.path,
             });
             break;
 

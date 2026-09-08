@@ -28,6 +28,37 @@ namespace UnityExplorer.MCPBridge
         private readonly object _queueLock = new object();
         
         public int Port { get; private set; } = 12345;
+
+        // Handle stabilization: instance_ids are process-local and die on
+        // scene change/restart. SessionId lets callers detect staleness.
+        private static int _sceneLoadCount = 0;
+        private static bool _sceneHooked = false;
+        public static string SessionId
+        {
+            get
+            {
+                try { return SceneManager.GetActiveScene().name + "#" + _sceneLoadCount; }
+                catch { return "unknown#" + _sceneLoadCount; }
+            }
+        }
+
+        private static void HookSceneCounter()
+        {
+            if (_sceneHooked) return;
+            _sceneHooked = true;
+            // Runtime hook (no compile-time dependency on the interop event shape).
+            try
+            {
+                var ev = typeof(SceneManager).GetEvent("sceneLoaded");
+                if (ev != null)
+                {
+                    Action<Scene, LoadSceneMode> handler = (s, m) => _sceneLoadCount++;
+                    var d = Delegate.CreateDelegate(ev.EventHandlerType, handler.Target, handler.Method);
+                    ev.AddEventHandler(null, d);
+                }
+            }
+            catch { }
+        }
         
 #if CPP
         public MCPBridge(IntPtr ptr) : base(ptr) { }
@@ -43,6 +74,7 @@ namespace UnityExplorer.MCPBridge
             DontDestroyOnLoad(obj);
             obj.hideFlags = HideFlags.HideAndDontSave;
             Instance = obj.AddComponent<MCPBridge>();
+            HookSceneCounter();
         }
         
         internal void Awake()
@@ -260,6 +292,10 @@ namespace UnityExplorer.MCPBridge
                     case "invoke_method": response = HandleInvokeMethod(request); break;
                     case "hierarchy": response = HandleHierarchy(request); break;
                     case "execute_csharp": response = HandleExecuteCSharp(request); break;
+                    case "list_assemblies": response = HandleListAssemblies(request); break;
+                    case "inspect_type": response = HandleInspectType(request); break;
+                    case "invoke_static": response = HandleInvokeStatic(request); break;
+                    case "resolve_path": response = HandleResolvePath(request); break;
                     default: response = new MCPResponse { Success = false, Error = "Unknown: " + request.Method }; break;
                 }
                 
@@ -273,6 +309,11 @@ namespace UnityExplorer.MCPBridge
         
         #region Request Handlers
         
+        private string StaleHandleError(int instanceId)
+        {
+            return "Stale handle " + instanceId + ": object destroyed or scene changed (session " + SessionId + "). Re-run find_gameobjects or resolve_path with the Hierarchy path instead of guessing IDs.";
+        }
+
         private MCPResponse HandlePing(MCPRequest request)
         {
             return new MCPResponse
@@ -282,7 +323,8 @@ namespace UnityExplorer.MCPBridge
                 {
                     Status = "ok",
                     UnityVersion = Application.unityVersion,
-                    BridgeVersion = "1.0.0"
+                    BridgeVersion = "1.1.0",
+                    SessionId = SessionId
                 }
             };
         }
@@ -319,7 +361,8 @@ namespace UnityExplorer.MCPBridge
                         Path = activeScene.path,
                         RootCount = activeScene.rootCount
                     },
-                    LoadedScenes = loadedScenes
+                    LoadedScenes = loadedScenes,
+                    SessionId = SessionId
                 }
             };
         }
@@ -389,7 +432,7 @@ namespace UnityExplorer.MCPBridge
             
             var obj = FindObjectById(instanceId) as GameObject;
             if (obj == null)
-                return new MCPResponse { Success = false, Error = "GameObject not found: " + instanceId };
+                return new MCPResponse { Success = false, Error = StaleHandleError(instanceId) };
             
             var info = new GameObjectDetailInfo
             {
@@ -445,7 +488,7 @@ namespace UnityExplorer.MCPBridge
             
             var obj = FindObjectById(instanceId) as GameObject;
             if (obj == null)
-                return new MCPResponse { Success = false, Error = "GameObject not found: " + instanceId };
+                return new MCPResponse { Success = false, Error = StaleHandleError(instanceId) };
             
             var components = new List<ComponentInfo>();
             foreach (var comp in obj.GetComponents<Component>())
@@ -470,7 +513,7 @@ components.Add(new ComponentInfo
             
             var obj = FindObjectById(instanceId);
             if (obj == null)
-                return new MCPResponse { Success = false, Error = "Object not found" };
+                return new MCPResponse { Success = false, Error = StaleHandleError(instanceId) + " (inspect)" };
             
             var info = new InspectResponse
             {
@@ -642,7 +685,7 @@ components.Add(new ComponentInfo
             
             var obj = FindObjectById(instanceId);
             if (obj == null)
-                return new MCPResponse { Success = false, Error = "Object not found: " + instanceId };
+                return new MCPResponse { Success = false, Error = StaleHandleError(instanceId) };
             
             var type = obj.GetType();
             var field = type.GetField(fieldName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static);
@@ -665,7 +708,7 @@ components.Add(new ComponentInfo
             
             var obj = FindObjectById(instanceId);
             if (obj == null)
-                return new MCPResponse { Success = false, Error = "Object not found: " + instanceId };
+                return new MCPResponse { Success = false, Error = StaleHandleError(instanceId) };
             
             var type = obj.GetType();
             var field = type.GetField(fieldName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static);
@@ -688,7 +731,7 @@ components.Add(new ComponentInfo
             
             var obj = FindObjectById(instanceId);
             if (obj == null)
-                return new MCPResponse { Success = false, Error = "Object not found: " + instanceId };
+                return new MCPResponse { Success = false, Error = StaleHandleError(instanceId) };
             
             var type = obj.GetType();
             var prop = type.GetProperty(propertyName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static);
@@ -714,7 +757,7 @@ components.Add(new ComponentInfo
             
             var obj = FindObjectById(instanceId);
             if (obj == null)
-                return new MCPResponse { Success = false, Error = "Object not found: " + instanceId };
+                return new MCPResponse { Success = false, Error = StaleHandleError(instanceId) };
             
             var type = obj.GetType();
             var prop = type.GetProperty(propertyName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static);
@@ -773,40 +816,62 @@ components.Add(new ComponentInfo
             
             Type type = null;
             if (obj != null) type = obj.GetType();
-            else if (!string.IsNullOrEmpty(typeName))
-            {
-                foreach (Assembly asm in AppDomain.CurrentDomain.GetAssemblies())
-                {
-                    type = asm.GetType(typeName);
-                    if (type != null) break;
-                }
-            }
-            
+            else if (!string.IsNullOrEmpty(typeName)) type = AssemblyInspector.ResolveType(null, typeName);
+
             if (type == null)
                 return new MCPResponse { Success = false, Error = "Type not found: " + typeName };
-            
-            MethodInfo method = null;
-            foreach (var m in type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static))
-            {
-                if (m.Name == methodName) { method = m; break; }
-            }
-            
-            if (method == null)
-                return new MCPResponse { Success = false, Error = "Method not found: " + methodName };
-            
+
+            var rawArgs = new System.Collections.Generic.List<System.Text.Json.JsonElement>();
+            if (request.Params is System.Text.Json.JsonElement j2)
+                rawArgs = ValueSerializer.GetArgsArray(j2);
+
+            string returnEncoding = ExtractString(request, "returnEncoding") ?? ExtractString(request, "ReturnEncoding") ?? "hex";
+
+            AssemblyInspector.StaticCall call;
+            try { call = AssemblyInspector.ResolveInstanceCall(type, methodName, rawArgs); }
+            catch (Exception ex) { return new MCPResponse { Success = false, Error = ex.Message }; }
+
+            if (!call.Method.IsStatic && obj == null)
+                return new MCPResponse { Success = false, Error = "Method " + methodName + " is an instance method but no live instance_id was given (" + StaleHandleError(instanceId) + ")" };
+
             try
             {
-                var methodArgs = ConvertArgs(args, method.GetParameters());
-                object result = method.Invoke(method.IsStatic ? null : obj, methodArgs);
-                return new MCPResponse { Success = true, Data = new MethodInvokeResponse { MethodName = method.Name, ReturnType = method.ReturnType.FullName, Result = result != null ? result.ToString() : "null" } };
+                // out/ref: callee must run before we read ConvertedArgs back.
+                object result = call.Method.Invoke(call.Method.IsStatic ? null : obj, call.ConvertedArgs);
+                var outArgs = AssemblyInspector.CollectOutArgs(call.Method, call.ConvertedArgs, returnEncoding);
+                return new MCPResponse
+                {
+                    Success = true,
+                    Data = new
+                    {
+                        methodName = call.Method.Name,
+                        returnType = call.Method.ReturnType.FullName,
+                        result = result != null ? result.ToString() : "null",
+                        resultValue = ValueSerializer.Serialize(result, returnEncoding),
+                        outArgs = outArgs
+                    }
+                };
             }
-            catch (Exception ex) { return new MCPResponse { Success = false, Error = ex.Message }; }
+            catch (TargetInvocationException tie)
+            {
+                return new MCPResponse { Success = false, Error = (tie.InnerException ?? tie).ToString() };
+            }
+            catch (Exception ex) { return new MCPResponse { Success = false, Error = ex.ToString() }; }
         }
         
         private MCPResponse HandleHierarchy(MCPRequest request)
         {
-            var parameters = request.Params as HierarchyParams;
-            int maxDepth = parameters != null ? parameters.MaxDepth : 10;
+            int maxDepth = 10;
+            if (request.Params is HierarchyParams hp) maxDepth = hp.MaxDepth;
+            else if (request.Params is System.Text.Json.JsonElement j)
+            {
+                if (j.TryGetProperty("max_depth", out var md) || j.TryGetProperty("MaxDepth", out md))
+                {
+                    try { maxDepth = md.GetInt32(); } catch { }
+                    if (maxDepth < 1) maxDepth = 1;
+                    if (maxDepth > 20) maxDepth = 20;
+                }
+            }
             
             var rootObjects = new List<HierarchyInfo>();
             for (int i = 0; i < SceneManager.sceneCount; i++)
@@ -841,7 +906,144 @@ components.Add(new ComponentInfo
         
         private MCPResponse HandleExecuteCSharp(MCPRequest request)
         {
-            return new MCPResponse { Success = true, Data = new { Output = "C# execution requires UnityExplorer C# Console" } };
+            string code = ExtractString(request, "code") ?? ExtractString(request, "Code");
+            if (string.IsNullOrEmpty(code))
+                return new MCPResponse { Success = false, Error = "Missing 'code' parameter" };
+            string encoding = ExtractString(request, "returnEncoding") ?? ExtractString(request, "ReturnEncoding") ?? "hex";
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var result = CSharpExecutor.Execute(code, encoding);
+            sw.Stop();
+
+            if (!result.Compiled && result.ReturnValue == null)
+                return new MCPResponse { Success = false, Error = result.Error, Data = new { compilerOutput = result.CompilerOutput, elapsedMs = sw.ElapsedMilliseconds } };
+            if (!string.IsNullOrEmpty(result.Error))
+                return new MCPResponse { Success = false, Error = result.Error, Data = new { compilerOutput = result.CompilerOutput, elapsedMs = sw.ElapsedMilliseconds } };
+            return new MCPResponse
+            {
+                Success = true,
+                Data = new
+                {
+                    result = result.ReturnValue,
+                    returnType = result.ReturnType,
+                    compilerOutput = result.CompilerOutput,
+                    elapsedMs = sw.ElapsedMilliseconds
+                }
+            };
+        }
+
+        private MCPResponse HandleListAssemblies(MCPRequest request)
+        {
+            string filter = ExtractString(request, "filter") ?? ExtractString(request, "Filter");
+            try
+            {
+                var names = AssemblyInspector.ListAssemblies(filter);
+                return new MCPResponse { Success = true, Data = new { assemblies = names, count = names.Count } };
+            }
+            catch (Exception ex) { return new MCPResponse { Success = false, Error = ex.ToString() }; }
+        }
+
+        private MCPResponse HandleInspectType(MCPRequest request)
+        {
+            string asm = ExtractString(request, "assembly") ?? ExtractString(request, "Assembly");
+            string type = ExtractString(request, "type") ?? ExtractString(request, "Type");
+            if (string.IsNullOrEmpty(type))
+                return new MCPResponse { Success = false, Error = "Missing 'type' parameter (full type name, e.g. System.Math)" };
+            try
+            {
+                var info = AssemblyInspector.InspectType(asm, type);
+                return new MCPResponse { Success = true, Data = info };
+            }
+            catch (Exception ex) { return new MCPResponse { Success = false, Error = ex.ToString() }; }
+        }
+
+        private MCPResponse HandleInvokeStatic(MCPRequest request)
+        {
+            string asm = ExtractString(request, "assembly") ?? ExtractString(request, "Assembly");
+            string typeName = ExtractString(request, "type") ?? ExtractString(request, "Type");
+            string methodName = ExtractString(request, "method") ?? ExtractString(request, "Method");
+            string encoding = ExtractString(request, "returnEncoding") ?? ExtractString(request, "ReturnEncoding") ?? "hex";
+            if (string.IsNullOrEmpty(typeName) || string.IsNullOrEmpty(methodName))
+                return new MCPResponse { Success = false, Error = "Missing 'type' and/or 'method' parameter" };
+
+            try
+            {
+                Type type = AssemblyInspector.ResolveType(asm, typeName);
+                if (type == null)
+                {
+                    // Fallback: pure-Il2Cpp static call via il2cpp_class_from_name.
+                    return InvokeIl2CppStatic(typeName, methodName, request, encoding);
+                }
+
+                var rawArgs = new System.Collections.Generic.List<System.Text.Json.JsonElement>();
+                if (request.Params is System.Text.Json.JsonElement j)
+                    rawArgs = ValueSerializer.GetArgsArray(j);
+
+                var call = AssemblyInspector.ResolveStaticCall(type, methodName, rawArgs);
+                object result = call.Method.Invoke(null, call.ConvertedArgs);
+
+                var outArgs = new System.Collections.Generic.List<object>();
+                ParameterInfo[] ps = call.Method.GetParameters();
+                for (int i = 0; i < ps.Length; i++)
+                {
+                    if (ps[i].ParameterType.IsByRef)
+                    {
+                        Type el = ps[i].ParameterType.GetElementType();
+                        outArgs.Add(new Dictionary<string, object>
+                        {
+                            { "index", i },
+                            { "name", ps[i].Name },
+                            { "type", el.FullName },
+                            { "value", ValueSerializer.Serialize(call.ConvertedArgs[i], encoding) }
+                        });
+                    }
+                }
+                return new MCPResponse
+                {
+                    Success = true,
+                    Data = new
+                    {
+                        methodName = call.Method.Name,
+                        returnType = call.Method.ReturnType.FullName,
+                        result = result != null ? result.ToString() : "null",
+                        resultValue = ValueSerializer.Serialize(result, encoding),
+                        outArgs = outArgs
+                    }
+                };
+            }
+            catch (TargetInvocationException tie)
+            {
+                return new MCPResponse { Success = false, Error = (tie.InnerException ?? tie).ToString() };
+            }
+            catch (Exception ex) { return new MCPResponse { Success = false, Error = ex.ToString() }; }
+        }
+
+        private MCPResponse HandleResolvePath(MCPRequest request)
+        {
+            string path = ExtractString(request, "path") ?? ExtractString(request, "Path");
+            if (string.IsNullOrEmpty(path))
+                return new MCPResponse { Success = false, Error = "Missing 'path' parameter (e.g. Root/Child)" };
+            try
+            {
+                var go = AssemblyInspector.ResolvePath(path);
+                if (go == null)
+                    return new MCPResponse { Success = false, Error = "Path not found: " + path + " (session " + SessionId + ")" };
+                return new MCPResponse
+                {
+                    Success = true,
+                    Data = new GameObjectInfo
+                    {
+                        Name = go.name,
+                        InstanceId = go.GetInstanceID(),
+                        Scene = go.scene.name,
+                        Active = go.activeInHierarchy,
+                        Path = AssemblyInspector.GetGameObjectPath(go),
+                        Tag = go.tag,
+                        Layer = go.layer
+                    }
+                };
+            }
+            catch (Exception ex) { return new MCPResponse { Success = false, Error = ex.ToString() }; }
         }
         
         #endregion
@@ -941,89 +1143,270 @@ components.Add(new ComponentInfo
                                 
                                 if (exc != IntPtr.Zero)
                                 {
-                                    return new MCPResponse { Success = false, Error = "IL2CPP Exception occurred" };
+                                    return new MCPResponse { Success = false, Error = "IL2CPP exception: " + ReadIl2CppException(exc) };
                                 }
-                                
+
                                 string returnType = Marshal.PtrToStringAnsi(IL2CPP.il2cpp_type_get_name(IL2CPP.il2cpp_method_get_return_type(method)));
-                                string resultStr = FormatIl2CppResult(result, returnType);
-                                
-                                return new MCPResponse { Success = true, Data = new { Method = methodName, Result = resultStr } };
+                                object resultValue = FormatIl2CppResult(result, returnType, "hex");
+                                string resultStr = resultValue != null ? resultValue.ToString() : "null";
+
+                                return new MCPResponse { Success = true, Data = new { Method = methodName, Result = resultStr, ResultValue = resultValue, ReturnType = returnType } };
                             }
                         }
                     }
                 }
-                
+
                 return new MCPResponse { Success = false, Error = "Method not found: " + methodName };
             }
             catch (Exception ex)
             {
-                return new MCPResponse { Success = false, Error = "IL2CPP invoke error: " + ex.Message };
+                return new MCPResponse { Success = false, Error = "IL2CPP invoke error: " + ex.ToString() };
             }
         }
-        
+
+        /// <summary>
+        /// Pure-Il2Cpp static call fallback (type invisible to managed reflection).
+        /// Resolves the class via il2cpp_class_from_name across domain assemblies.
+        /// </summary>
+        private unsafe MCPResponse InvokeIl2CppStatic(string typeFullName, string methodName, MCPRequest request, string encoding)
+        {
+            try
+            {
+                int dot = typeFullName.LastIndexOf('.');
+                string ns = dot > 0 ? typeFullName.Substring(0, dot) : "";
+                string cls = dot > 0 ? typeFullName.Substring(dot + 1) : typeFullName;
+
+                IntPtr klass = IntPtr.Zero;
+                IntPtr domain = IL2CPP.il2cpp_domain_get();
+                if (domain != IntPtr.Zero)
+                {
+                    uint size = 0;
+                    IntPtr* assemblies = IL2CPP.il2cpp_domain_get_assemblies(domain, ref size);
+                    for (uint i = 0; i < size && klass == IntPtr.Zero; i++)
+                    {
+                        try
+                        {
+                            IntPtr image = IL2CPP.il2cpp_assembly_get_image(assemblies[i]);
+                            IntPtr found = IL2CPP.il2cpp_class_from_name(image, ns, cls);
+                            if (found != IntPtr.Zero) klass = found;
+                        }
+                        catch { }
+                    }
+                }
+                if (klass == IntPtr.Zero)
+                    return new MCPResponse { Success = false, Error = "Il2Cpp class not found: " + typeFullName };
+
+                object[] args = ParseLegacyArgs(request);
+                IntPtr iter = IntPtr.Zero;
+                IntPtr method = IntPtr.Zero;
+                while ((method = IL2CPP.il2cpp_class_get_methods(klass, ref iter)) != IntPtr.Zero)
+                {
+                    string name = Marshal.PtrToStringAnsi(IL2CPP.il2cpp_method_get_name(method));
+                    if (name != methodName) continue;
+                    uint paramCount = IL2CPP.il2cpp_method_get_param_count(method);
+                    int got = args != null ? args.Length : 0;
+                    if ((uint)got != paramCount) continue;
+
+                    IntPtr exc = IntPtr.Zero;
+                    void** paramsPtr = null;
+                    if (got > 0)
+                    {
+                        paramsPtr = (void**)Marshal.AllocHGlobal(got * IntPtr.Size);
+                        for (int i = 0; i < got; i++)
+                        {
+                            IntPtr pt = IL2CPP.il2cpp_method_get_param(method, (uint)i);
+                            paramsPtr[i] = (void*)ConvertArgToIl2Cpp(args[i], Marshal.PtrToStringAnsi(IL2CPP.il2cpp_type_get_name(pt)));
+                        }
+                    }
+                    IntPtr result = IL2CPP.il2cpp_runtime_invoke(method, IntPtr.Zero, paramsPtr, ref exc);
+                    if (got > 0) Marshal.FreeHGlobal((IntPtr)paramsPtr);
+                    if (exc != IntPtr.Zero)
+                        return new MCPResponse { Success = false, Error = "IL2CPP exception: " + ReadIl2CppException(exc) };
+
+                    string returnType = Marshal.PtrToStringAnsi(IL2CPP.il2cpp_type_get_name(IL2CPP.il2cpp_method_get_return_type(method)));
+                    object resultValue = FormatIl2CppResult(result, returnType, encoding);
+                    return new MCPResponse
+                    {
+                        Success = true,
+                        Data = new
+                        {
+                            methodName = methodName,
+                            returnType = returnType,
+                            result = resultValue != null ? resultValue.ToString() : "null",
+                            resultValue = resultValue,
+                            outArgs = new object[0]
+                        }
+                    };
+                }
+                return new MCPResponse { Success = false, Error = "Il2Cpp static method not found: " + typeFullName + "." + methodName };
+            }
+            catch (Exception ex)
+            {
+                return new MCPResponse { Success = false, Error = "IL2CPP static invoke error: " + ex.ToString() };
+            }
+        }
+
+        private static object[] ParseLegacyArgs(MCPRequest request)
+        {
+            if (!(request.Params is System.Text.Json.JsonElement j)) return null;
+            if (!(j.TryGetProperty("args", out var argsProp) || j.TryGetProperty("Args", out argsProp))) return null;
+            if (argsProp.ValueKind != System.Text.Json.JsonValueKind.Array) return null;
+            var list = new System.Collections.Generic.List<object>();
+            foreach (var item in argsProp.EnumerateArray())
+            {
+                switch (item.ValueKind)
+                {
+                    case System.Text.Json.JsonValueKind.String: list.Add(item.GetString()); break;
+                    case System.Text.Json.JsonValueKind.Number:
+                        if (item.TryGetInt32(out int oi)) list.Add(oi);
+                        else list.Add(item.GetDouble());
+                        break;
+                    case System.Text.Json.JsonValueKind.True: list.Add(true); break;
+                    case System.Text.Json.JsonValueKind.False: list.Add(false); break;
+                    default: list.Add(null); break;
+                }
+            }
+            return list.ToArray();
+        }
+
+        private static string ReadIl2CppException(IntPtr exc)
+        {
+            try
+            {
+                var exObj = new Il2CppSystem.Exception(exc);
+                return exObj.Message ?? exObj.ToString();
+            }
+            catch (Exception ex) { return "<unreadable Il2Cpp exception>; bridge error: " + ex.Message; }
+        }
+
         private unsafe IntPtr ConvertArgToIl2Cpp(object value, string typeName)
         {
-            IntPtr ptr = Marshal.AllocHGlobal(8);
-            
-            switch (typeName.ToLower())
+            string t = (typeName ?? "").ToLower();
+
+            // Reference types: il2cpp_runtime_invoke takes the object pointer itself.
+            if (t == "system.string" || t == "string")
             {
-                case "system.int32":
-                case "int":
-                    Marshal.WriteInt32(ptr, Convert.ToInt32(value));
-                    break;
-                case "system.single":
-                case "float":
-                    float f = Convert.ToSingle(value);
-                    Marshal.WriteInt32(ptr, BitConverter.ToInt32(BitConverter.GetBytes(f), 0));
-                    break;
-                case "system.boolean":
-                case "bool":
-                    Marshal.WriteByte(ptr, Convert.ToBoolean(value) ? (byte)1 : (byte)0);
-                    break;
-                case "system.double":
-                    double d = Convert.ToDouble(value);
-                    Marshal.WriteInt64(ptr, BitConverter.ToInt64(BitConverter.GetBytes(d), 0));
-                    break;
-                case "system.string":
-                    IntPtr strPtr = Marshal.StringToHGlobalAnsi(value?.ToString());
-                    Marshal.WriteIntPtr(ptr, strPtr);
-                    break;
-                default:
-                    Marshal.WriteInt32(ptr, 0);
-                    break;
+                try
+                {
+                    if (value == null) return IntPtr.Zero;
+                    return IL2CPP.ManagedStringToIl2Cpp(value.ToString());
+                }
+                catch { return IntPtr.Zero; }
             }
-            
+            if (t == "system.byte[]" || t == "byte[]")
+            {
+                try
+                {
+                    byte[] bytes = value is string s ? ValueSerializer.DecodeBytes(s) : (byte[])value;
+                    if (bytes == null) return IntPtr.Zero;
+                    IntPtr corlib = IL2CPP.il2cpp_get_corlib();
+                    IntPtr image = IL2CPP.il2cpp_assembly_get_image(corlib);
+                    IntPtr byteClass = IL2CPP.il2cpp_class_from_name(image, "System", "Byte");
+                    IntPtr arr = IL2CPP.il2cpp_array_new(byteClass, (nuint)bytes.Length);
+                    // SzArray data starts after 32-byte header (16 obj + 8 bounds + 8 length).
+                    Marshal.Copy(bytes, 0, arr + 32, bytes.Length);
+                    return arr;
+                }
+                catch { return IntPtr.Zero; }
+            }
+
+            // Value types: pass pointer to the raw value.
+            IntPtr ptr = Marshal.AllocHGlobal(16);
+            try
+            {
+                switch (t)
+                {
+                    case "system.int32":
+                    case "int":
+                        Marshal.WriteInt32(ptr, Convert.ToInt32(value)); break;
+                    case "system.int64":
+                    case "long":
+                        Marshal.WriteInt64(ptr, Convert.ToInt64(value)); break;
+                    case "system.single":
+                    case "float":
+                        float f = Convert.ToSingle(value);
+                        Marshal.WriteInt32(ptr, BitConverter.ToInt32(BitConverter.GetBytes(f), 0)); break;
+                    case "system.double":
+                        double d = Convert.ToDouble(value);
+                        Marshal.WriteInt64(ptr, BitConverter.ToInt64(BitConverter.GetBytes(d), 0)); break;
+                    case "system.boolean":
+                    case "bool":
+                        Marshal.WriteByte(ptr, Convert.ToBoolean(value) ? (byte)1 : (byte)0); break;
+                    case "system.byte":
+                        Marshal.WriteByte(ptr, Convert.ToByte(value)); break;
+                    default:
+                        Marshal.WriteIntPtr(ptr, IntPtr.Zero); break;
+                }
+            }
+            catch { Marshal.WriteIntPtr(ptr, IntPtr.Zero); }
             return ptr;
         }
-        
-        private string FormatIl2CppResult(IntPtr result, string returnType)
+
+        /// <summary>P3 result marshalling for raw Il2Cpp pointers.</summary>
+        private object FormatIl2CppResult(IntPtr result, string returnType, string encoding = "hex")
         {
-            if (result == IntPtr.Zero) return "null";
-            
-            switch (returnType.ToLower())
+            if (result == IntPtr.Zero) return null;
+            string t = (returnType ?? "").ToLower();
+            try
             {
-                case "system.void":
-                    return "void";
-                case "system.int32":
-                case "int":
-                    return Marshal.ReadInt32(result).ToString();
-                case "system.single":
-                case "float":
-                    return BitConverter.ToSingle(BitConverter.GetBytes(Marshal.ReadInt32(result)), 0).ToString();
-                case "system.boolean":
-                case "bool":
-                    return (Marshal.ReadByte(result) != 0).ToString();
-                case "system.string":
-                    IntPtr strPtr = Marshal.ReadIntPtr(result);
-                    if (strPtr == IntPtr.Zero) return "null";
-                    return Marshal.PtrToStringAnsi(strPtr);
-                default:
-                    return $"[Object @ {result}]";
+                switch (t)
+                {
+                    case "system.void":
+                    case "void":
+                        return "void";
+                    case "system.boolean":
+                    case "bool":
+                        return Marshal.ReadByte(IL2CPP.il2cpp_object_unbox(result)) != 0;
+                    case "system.int32":
+                    case "int":
+                        return Marshal.ReadInt32(IL2CPP.il2cpp_object_unbox(result));
+                    case "system.int64":
+                    case "long":
+                        return Marshal.ReadInt64(IL2CPP.il2cpp_object_unbox(result));
+                    case "system.single":
+                    case "float":
+                        return BitConverter.ToSingle(BitConverter.GetBytes(Marshal.ReadInt32(IL2CPP.il2cpp_object_unbox(result))), 0);
+                    case "system.double":
+                        return BitConverter.ToDouble(BitConverter.GetBytes(Marshal.ReadInt64(IL2CPP.il2cpp_object_unbox(result))), 0);
+                    case "system.byte":
+                        return Marshal.ReadByte(IL2CPP.il2cpp_object_unbox(result));
+                    case "system.string":
+                    case "string":
+                        return ReadIl2CppString(result);
+                    case "system.byte[]":
+                        try
+                        {
+                            var arr = new Il2CppInterop.Runtime.InteropTypes.Arrays.Il2CppStructArray<byte>(result);
+                            int len = (int)arr.Length;
+                            var bytes = new byte[len];
+                            for (int i = 0; i < len; i++) bytes[i] = arr[i];
+                            return ValueSerializer.EncodeBytes(bytes, encoding);
+                        }
+                        catch { return new Dictionary<string, object> { { "type", returnType }, { "pointer", result.ToString() } }; }
+                    default:
+                        return new Dictionary<string, object> { { "type", returnType }, { "pointer", result.ToString() } };
+                }
             }
+            catch { return new Dictionary<string, object> { { "type", returnType }, { "pointer", result.ToString() } }; }
+        }
+
+        private static string ReadIl2CppString(IntPtr strPtr)
+        {
+            if (strPtr == IntPtr.Zero) return null;
+            try
+            {
+                // Il2CppString: 16-byte object header + int32 length + UTF-16 chars.
+                int len = Marshal.ReadInt32(strPtr + 16);
+                if (len < 0 || len > 1 << 20) return Marshal.PtrToStringUni(strPtr);
+                return Marshal.PtrToStringUni(strPtr + 20, len);
+            }
+            catch { return Marshal.PtrToStringUni(strPtr); }
         }
         
         private UnityEngine.Object FindObjectById(int instanceId)
         {
+            if (instanceId >= 1000000 && ObjectRegistry.TryGet(instanceId, out object reg) && reg is UnityEngine.Object uo)
+                return uo;
             foreach (var obj in Resources.FindObjectsOfTypeAll<UnityEngine.Object>())
             {
                 if (obj != null && obj.GetInstanceID() == instanceId)
