@@ -449,16 +449,7 @@ namespace UnityExplorer.MCPBridge
         
         private MCPResponse HandleGetGameObject(MCPRequest request)
         {
-            int instanceId = 0;
-            if (request.Params is GetGameObjectParams p)
-            {
-                instanceId = p.InstanceId;
-            }
-            else if (request.Params is System.Text.Json.JsonElement j)
-            {
-                if (j.TryGetProperty("instance_id", out var idProp) || j.TryGetProperty("InstanceId", out idProp))
-                    instanceId = idProp.GetInt32();
-            }
+            int instanceId = ExtractInstanceId(request);
             
             var obj = FindObjectById(instanceId) as GameObject;
             if (obj == null)
@@ -510,16 +501,7 @@ namespace UnityExplorer.MCPBridge
         
         private MCPResponse HandleGetComponents(MCPRequest request)
         {
-            int instanceId = 0;
-            if (request.Params is GetComponentsParams p)
-            {
-                instanceId = p.InstanceId;
-            }
-            else if (request.Params is System.Text.Json.JsonElement j)
-            {
-                if (j.TryGetProperty("instance_id", out var idProp) || j.TryGetProperty("InstanceId", out idProp))
-                    instanceId = idProp.GetInt32();
-            }
+            int instanceId = ExtractInstanceId(request);
             
             var obj = FindObjectById(instanceId) as GameObject;
             if (obj == null)
