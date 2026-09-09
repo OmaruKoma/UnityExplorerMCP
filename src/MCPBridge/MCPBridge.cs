@@ -39,7 +39,8 @@ namespace UnityExplorer.MCPBridge
             "get_components", "inspect", "get_field", "set_field",
             "get_property", "set_property", "invoke_method", "hierarchy",
             "execute_csharp", "list_assemblies", "inspect_type", "invoke_static",
-            "resolve_path", "capabilities"
+            "resolve_path", "capabilities", "search_members", "find_objects_of_type",
+            "get_static", "set_static", "list_hooks"
         };
 
         // Handle stabilization: instance_ids are process-local and die on
@@ -310,6 +311,11 @@ namespace UnityExplorer.MCPBridge
                     case "invoke_static": response = HandleInvokeStatic(request); break;
                     case "resolve_path": response = HandleResolvePath(request); break;
                     case "capabilities": response = HandleCapabilities(request); break;
+                    case "search_members": response = HandleSearchMembers(request); break;
+                    case "find_objects_of_type": response = HandleFindObjectsOfType(request); break;
+                    case "get_static": response = HandleGetStatic(request); break;
+                    case "set_static": response = HandleSetStatic(request); break;
+                    case "list_hooks": response = HandleListHooks(request); break;
                     default: response = new MCPResponse { Success = false, Error = "Unknown: " + request.Method }; break;
                 }
                 
@@ -1216,7 +1222,316 @@ components.Add(new ComponentInfo
                 }
             };
         }
-        
+
+        private MCPResponse HandleSearchMembers(MCPRequest request)
+        {
+            string nameContains = ExtractString(request, "name_contains") ?? ExtractString(request, "NameContains")
+                ?? ExtractString(request, "name") ?? ExtractString(request, "Name");
+            if (string.IsNullOrEmpty(nameContains))
+                return new MCPResponse { Success = false, Error = "Missing 'name_contains' parameter" };
+            string typeFilter = ExtractString(request, "type_filter") ?? ExtractString(request, "TypeFilter");
+            string memberKind = ExtractString(request, "member_kind") ?? ExtractString(request, "MemberKind") ?? "all";
+            string assemblyFilter = ExtractString(request, "assembly_filter") ?? ExtractString(request, "AssemblyFilter");
+            int limit = 50;
+            int cursor = 0;
+            if (request.Params is System.Text.Json.JsonElement pj)
+            {
+                var paging = Paging.Read(pj, 50);
+                limit = paging.Limit > 0 ? paging.Limit : 50;
+                cursor = paging.Cursor;
+            }
+            try
+            {
+                var all = AssemblyInspector.SearchMembers(nameContains, typeFilter, memberKind, assemblyFilter);
+                var page = Paging.Apply(all, new Paging.Params
+                {
+                    Limit = limit,
+                    Cursor = cursor,
+                    Requested = true
+                }, null);
+                return new MCPResponse { Success = true, Data = Paging.Envelope(page) };
+            }
+            catch (Exception ex) { return new MCPResponse { Success = false, Error = ex.ToString() }; }
+        }
+
+        private MCPResponse HandleFindObjectsOfType(MCPRequest request)
+        {
+            string typeName = ExtractString(request, "type") ?? ExtractString(request, "Type");
+            if (string.IsNullOrEmpty(typeName))
+                return new MCPResponse { Success = false, Error = "Missing 'type' parameter (full type name)" };
+            string asm = ExtractString(request, "assembly") ?? ExtractString(request, "Assembly");
+            int limit = 100;
+            int cursor = 0;
+            if (request.Params is System.Text.Json.JsonElement pj)
+            {
+                var paging = Paging.Read(pj, 100);
+                limit = paging.Limit > 0 ? paging.Limit : 100;
+                cursor = paging.Cursor;
+            }
+            try
+            {
+                var all = AssemblyInspector.FindObjectsOfType(asm, typeName);
+                var page = Paging.Apply(all, new Paging.Params
+                {
+                    Limit = limit,
+                    Cursor = cursor,
+                    Requested = true
+                }, null);
+                return new MCPResponse { Success = true, Data = Paging.Envelope(page) };
+            }
+            catch (Exception ex) { return new MCPResponse { Success = false, Error = ex.ToString() }; }
+        }
+
+        private static bool ResolveStaticMember(string asm, string typeName, string member,
+            out Type type, out FieldInfo field, out PropertyInfo prop, out string error)
+        {
+            type = null;
+            field = null;
+            prop = null;
+            error = null;
+            if (string.IsNullOrEmpty(typeName) || string.IsNullOrEmpty(member))
+            {
+                error = "Missing 'type' and/or 'member' parameter";
+                return false;
+            }
+            type = AssemblyInspector.ResolveType(asm, typeName);
+            if (type == null)
+            {
+                error = "Type not found: " + typeName;
+                return false;
+            }
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static;
+            field = type.GetField(member, flags);
+            if (field == null) prop = type.GetProperty(member, flags);
+            if (field == null && prop == null)
+            {
+                error = "Static field/property not found: " + type.FullName + "." + member;
+                return false;
+            }
+            return true;
+        }
+
+        private MCPResponse HandleGetStatic(MCPRequest request)
+        {
+            string asm = ExtractString(request, "assembly") ?? ExtractString(request, "Assembly");
+            string typeName = ExtractString(request, "type") ?? ExtractString(request, "Type");
+            string member = ExtractString(request, "member") ?? ExtractString(request, "Member");
+            string encoding = ExtractString(request, "returnEncoding") ?? ExtractString(request, "ReturnEncoding") ?? "hex";
+            Type type;
+            FieldInfo field;
+            PropertyInfo prop;
+            string error;
+            if (!ResolveStaticMember(asm, typeName, member, out type, out field, out prop, out error))
+                return new MCPResponse { Success = false, Error = error };
+            try
+            {
+                object value;
+                string valueType;
+                if (field != null)
+                {
+                    value = field.GetValue(null);
+                    valueType = field.FieldType.FullName;
+                    member = field.Name;
+                }
+                else
+                {
+                    if (!prop.CanRead)
+                        return new MCPResponse { Success = false, Error = "Property not readable: " + prop.Name };
+                    value = prop.GetValue(null, null);
+                    valueType = prop.PropertyType.FullName;
+                    member = prop.Name;
+                }
+                return new MCPResponse
+                {
+                    Success = true,
+                    Data = new Dictionary<string, object>
+                    {
+                        { "type", type.FullName },
+                        { "member", member },
+                        { "member_type", valueType },
+                        { "is_static", true },
+                        { "value", ValueSerializer.Serialize(value, encoding) }
+                    }
+                };
+            }
+            catch (Exception ex) { return new MCPResponse { Success = false, Error = ex.ToString() }; }
+        }
+
+        private MCPResponse HandleSetStatic(MCPRequest request)
+        {
+            string asm = ExtractString(request, "assembly") ?? ExtractString(request, "Assembly");
+            string typeName = ExtractString(request, "type") ?? ExtractString(request, "Type");
+            string member = ExtractString(request, "member") ?? ExtractString(request, "Member");
+            Type type;
+            FieldInfo field;
+            PropertyInfo prop;
+            string error;
+            if (!ResolveStaticMember(asm, typeName, member, out type, out field, out prop, out error))
+                return new MCPResponse { Success = false, Error = error };
+            try
+            {
+                object rawValue = ExtractValue(request, "value") ?? ExtractValue(request, "Value");
+                System.Text.Json.JsonElement rawEl = default(System.Text.Json.JsonElement);
+                bool hasEl = false;
+                if (request.Params is System.Text.Json.JsonElement j)
+                {
+                    System.Text.Json.JsonElement v;
+                    if (j.TryGetProperty("value", out v) || j.TryGetProperty("Value", out v))
+                    {
+                        rawEl = v;
+                        hasEl = true;
+                    }
+                }
+                if (field != null)
+                {
+                    if (field.IsLiteral && !field.IsInitOnly)
+                        return new MCPResponse { Success = false, Error = "Field is const and cannot be written: " + field.Name };
+                    object converted = hasEl
+                        ? ValueSerializer.ConvertJsonElement(rawEl, field.FieldType)
+                        : ConvertValue(rawValue, field.FieldType);
+                    field.SetValue(null, converted);
+                    return new MCPResponse
+                    {
+                        Success = true,
+                        Data = new Dictionary<string, object>
+                        {
+                            { "type", type.FullName },
+                            { "member", field.Name },
+                            { "newValue", ValueSerializer.Serialize(converted, "hex") }
+                        }
+                    };
+                }
+                if (!prop.CanWrite)
+                    return new MCPResponse { Success = false, Error = "Property not writable: " + prop.Name };
+                object pconverted = hasEl
+                    ? ValueSerializer.ConvertJsonElement(rawEl, prop.PropertyType)
+                    : ConvertValue(rawValue, prop.PropertyType);
+                prop.SetValue(null, pconverted, null);
+                return new MCPResponse
+                {
+                    Success = true,
+                    Data = new Dictionary<string, object>
+                    {
+                        { "type", type.FullName },
+                        { "member", prop.Name },
+                        { "newValue", ValueSerializer.Serialize(pconverted, "hex") }
+                    }
+                };
+            }
+            catch (Exception ex) { return new MCPResponse { Success = false, Error = ex.ToString() }; }
+        }
+
+        private MCPResponse HandleListHooks(MCPRequest request)
+        {
+            int limit = 100;
+            int cursor = 0;
+            if (request.Params is System.Text.Json.JsonElement pj)
+            {
+                var paging = Paging.Read(pj, 100);
+                limit = paging.Limit > 0 ? paging.Limit : 100;
+                cursor = paging.Cursor;
+            }
+            try
+            {
+                var all = ListHarmonyPatches();
+                var page = Paging.Apply(all, new Paging.Params
+                {
+                    Limit = limit,
+                    Cursor = cursor,
+                    Requested = true
+                }, null);
+                return new MCPResponse { Success = true, Data = Paging.Envelope(page) };
+            }
+            catch (Exception ex) { return new MCPResponse { Success = false, Error = ex.ToString() }; }
+        }
+
+        /// <summary>
+        /// P1-4 read-only: enumerate Harmony-patched methods via reflection only,
+        /// so no Harmony reference is needed on either backend.
+        /// </summary>
+        private static List<Dictionary<string, object>> ListHarmonyPatches()
+        {
+            var results = new List<Dictionary<string, object>>();
+            Type harmonyType = null;
+            foreach (Assembly asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try
+                {
+                    Type t = asm.GetType("HarmonyLib.Harmony");
+                    if (t != null) { harmonyType = t; break; }
+                }
+                catch { }
+            }
+            if (harmonyType == null)
+            {
+                results.Add(new Dictionary<string, object>
+                {
+                    { "note", "HarmonyLib is not loaded in this runtime; no patch inventory available." }
+                });
+                return results;
+            }
+            try
+            {
+                MethodInfo getAll = harmonyType.GetMethod("GetAllPatchedMethods",
+                    BindingFlags.Public | BindingFlags.Static);
+                MethodInfo getInfo = harmonyType.GetMethod("GetPatchInfo",
+                    BindingFlags.Public | BindingFlags.Static);
+                if (getAll == null) return results;
+                var patched = getAll.Invoke(null, null) as System.Collections.IEnumerable;
+                if (patched == null) return results;
+                foreach (object m in patched)
+                {
+                    try
+                    {
+                        var mb = m as MethodBase;
+                        if (mb == null) continue;
+                        var entry = new Dictionary<string, object>
+                        {
+                            { "method", (mb.DeclaringType != null ? mb.DeclaringType.FullName + "." : "") + mb.Name },
+                            { "owners", new List<string>() }
+                        };
+                        if (getInfo != null)
+                        {
+                            object info = getInfo.Invoke(null, new object[] { mb });
+                            if (info != null)
+                            {
+                                var owners = (List<string>)entry["owners"];
+                                foreach (string slot in new string[] { "Prefixes", "Postfixes", "Transpilers", "Finalizers" })
+                                {
+                                    PropertyInfo pi = info.GetType().GetProperty(slot);
+                                    if (pi == null) continue;
+                                    var patches = pi.GetValue(info, null) as System.Collections.IEnumerable;
+                                    if (patches == null) continue;
+                                    foreach (object patch in patches)
+                                    {
+                                        try
+                                        {
+                                            PropertyInfo ownerProp = patch.GetType().GetProperty("owner");
+                                            if (ownerProp == null) continue;
+                                            string owner = ownerProp.GetValue(patch, null) as string;
+                                            if (!string.IsNullOrEmpty(owner) && !owners.Contains(owner))
+                                                owners.Add(owner);
+                                        }
+                                        catch { }
+                                    }
+                                }
+                            }
+                        }
+                        results.Add(entry);
+                    }
+                    catch { }
+                }
+            }
+            catch (Exception ex)
+            {
+                results.Add(new Dictionary<string, object>
+                {
+                    { "note", "Failed to enumerate Harmony patches: " + ex.GetType().Name }
+                });
+            }
+            return results;
+        }
+
         #endregion
         
         #region Utility Methods

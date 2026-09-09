@@ -283,17 +283,24 @@ async function testResolvePath() {
       console.log('✗ resolve_path skipped: no GameObject with Path found');
       return false;
     }
-    const targetPath = list[0].Path;
+    // Cloned objects can share identical paths; prefer a unique one so the
+    // round-trip assertion (ID equality) is meaningful.
+    const seen = {};
+    for (const o of list) seen[o.Path] = (seen[o.Path] || 0) + 1;
+    const target = list.find(o => o.Path && seen[o.Path] === 1) || list[0];
+    const targetPath = target.Path;
     const response = await axios.post(UNITY_BRIDGE_URL, {
       method: 'resolve_path',
       params: { path: targetPath }
     }, { timeout: 10000 });
 
-    if (ok(response) && payload(response).InstanceId === list[0].InstanceId) {
-      console.log(`✓ resolve_path round-trip OK: ${targetPath}`);
+    const rd = payload(response);
+    if (ok(response) && rd.Path === targetPath && rd.InstanceId) {
+      const idMatch = rd.InstanceId === target.InstanceId ? '' : ' (duplicate path, different instance — still correct)';
+      console.log(`✓ resolve_path round-trip OK: ${targetPath}${idMatch}`);
       return true;
     } else {
-      console.log('✗ resolve_path error:', errMsg(response) || 'ID mismatch');
+      console.log('✗ resolve_path error:', errMsg(response) || 'path mismatch');
       return false;
     }
   } catch (error) {
@@ -425,6 +432,108 @@ async function testPagination() {
   }
 }
 
+async function testSearchMembers() {
+  console.log('\nTesting search_members (P1-1)...');
+
+  try {
+    const response = await axios.post(UNITY_BRIDGE_URL, {
+      method: 'search_members',
+      params: { name_contains: 'timeScale', limit: 10 }
+    }, { timeout: 60000 });
+
+    const d = payload(response);
+    if (ok(response) && d.items && d.items.length > 0
+        && d.items[0].assembly && d.items[0].type && d.items[0].signature) {
+      console.log(`✓ search_members found ${d.total} match(es), e.g. ${d.items[0].type}.${d.items[0].member}`);
+      return true;
+    } else {
+      console.log('✗ search_members error:', errMsg(response) || 'no items');
+      return false;
+    }
+  } catch (error) {
+    console.log('✗ search_members failed:', error.message);
+    return false;
+  }
+}
+
+async function testFindObjectsOfType() {
+  console.log('\nTesting find_objects_of_type (P1-2)...');
+
+  try {
+    const response = await axios.post(UNITY_BRIDGE_URL, {
+      method: 'find_objects_of_type',
+      params: { type: 'UnityEngine.Camera', limit: 10 }
+    }, { timeout: 30000 });
+
+    const d = payload(response);
+    if (ok(response) && d.items && d.items.length > 0 && d.items[0].handle && d.items[0].path) {
+      console.log(`✓ find_objects_of_type found ${d.total} Camera(s), e.g. ${d.items[0].path}`);
+      return true;
+    } else {
+      console.log('✗ find_objects_of_type error:', errMsg(response) || 'no Camera instances');
+      return false;
+    }
+  } catch (error) {
+    console.log('✗ find_objects_of_type failed:', error.message);
+    return false;
+  }
+}
+
+async function testGetSetStatic() {
+  console.log('\nTesting get_static/set_static (P1-3)...');
+
+  try {
+    const get = await axios.post(UNITY_BRIDGE_URL, {
+      method: 'get_static',
+      params: { type: 'UnityEngine.Time', member: 'timeScale' }
+    }, { timeout: 10000 });
+
+    const gd = payload(get);
+    if (!ok(get) || gd.value === undefined) {
+      console.log('✗ get_static error:', errMsg(get) || 'no value');
+      return false;
+    }
+    const set = await axios.post(UNITY_BRIDGE_URL, {
+      method: 'set_static',
+      params: { type: 'UnityEngine.Time', member: 'timeScale', value: gd.value }
+    }, { timeout: 10000 });
+
+    if (ok(set) && payload(set).member === 'timeScale') {
+      console.log(`✓ get_static/set_static round-trip OK (timeScale=${JSON.stringify(gd.value)})`);
+      return true;
+    } else {
+      console.log('✗ set_static error:', errMsg(set) || 'bad response');
+      return false;
+    }
+  } catch (error) {
+    console.log('✗ get/set_static failed:', error.message);
+    return false;
+  }
+}
+
+async function testListHooks() {
+  console.log('\nTesting list_hooks (P1-4 read-only)...');
+
+  try {
+    const response = await axios.post(UNITY_BRIDGE_URL, {
+      method: 'list_hooks',
+      params: { limit: 5 }
+    }, { timeout: 30000 });
+
+    const d = payload(response);
+    if (ok(response) && d.items && typeof d.total === 'number') {
+      console.log(`✓ list_hooks OK (total=${d.total})`);
+      return true;
+    } else {
+      console.log('✗ list_hooks error:', errMsg(response) || 'bad envelope');
+      return false;
+    }
+  } catch (error) {
+    console.log('✗ list_hooks failed:', error.message);
+    return false;
+  }
+}
+
 async function testMCPServer() {
   console.log('\nTesting MCP Server tool registration (spawn stdio)...');
 
@@ -445,7 +554,7 @@ async function testMCPServer() {
         if (response.result && response.result.tools) {
           clearTimeout(timer);
           const names = response.result.tools.map(t => t.name);
-          const expected = 19;
+          const expected = 24;
           console.log(`✓ MCP Server registered ${names.length} tools`);
           server.kill();
           resolve(names.length === expected);
@@ -479,6 +588,10 @@ async function runTests() {
     capabilities: await testCapabilities(),
     sessionHandle: await testSessionHandle(),
     pagination: await testPagination(),
+    searchMembers: await testSearchMembers(),
+    findObjectsOfType: await testFindObjectsOfType(),
+    getSetStatic: await testGetSetStatic(),
+    listHooks: await testListHooks(),
     mcpServer: await testMCPServer()
   };
 

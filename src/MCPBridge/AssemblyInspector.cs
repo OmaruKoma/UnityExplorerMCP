@@ -169,6 +169,155 @@ namespace UnityExplorer.MCPBridge
             return name != null && name.IndexOf(contains, StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
+        /// <summary>
+        /// P1-1: search fields/properties/methods across loaded assemblies.
+        /// kind: "method" | "field" | "property" | "all".
+        /// </summary>
+        public static List<Dictionary<string, object>> SearchMembers(
+            string nameContains, string typeFilter, string memberKind, string assemblyFilter)
+        {
+            var results = new List<Dictionary<string, object>>();
+            if (string.IsNullOrEmpty(nameContains)) return results;
+            string kind = (memberKind ?? "all").ToLower();
+            bool wantMethod = kind == "all" || kind == "method" || kind == "methods";
+            bool wantField = kind == "all" || kind == "field" || kind == "fields";
+            bool wantProp = kind == "all" || kind == "property" || kind == "properties";
+
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static;
+            foreach (Assembly asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                string asmName;
+                try { asmName = asm.GetName().Name; }
+                catch { continue; }
+                if (!MemberMatches(asmName, assemblyFilter)) continue;
+                if (asmName == "completions") continue;
+                Type[] types;
+                try { types = asm.GetTypes(); }
+                catch (ReflectionTypeLoadException ex) { types = ex.Types; }
+                catch { continue; }
+                foreach (Type t in types)
+                {
+                    if (t == null || !MemberMatches(t.FullName ?? t.Name, typeFilter)) continue;
+                    string tname = t.FullName ?? t.Name;
+                    try
+                    {
+                        if (wantField)
+                        {
+                            foreach (FieldInfo f in t.GetFields(flags))
+                            {
+                                if (!MemberMatches(f.Name, nameContains)) continue;
+                                results.Add(new Dictionary<string, object>
+                                {
+                                    { "assembly", asmName },
+                                    { "type", tname },
+                                    { "member", f.Name },
+                                    { "member_kind", "field" },
+                                    { "is_static", f.IsStatic },
+                                    { "signature", (f.FieldType != null ? ShortName(f.FieldType) : "?") + " " + f.Name }
+                                });
+                            }
+                        }
+                        if (wantProp)
+                        {
+                            foreach (PropertyInfo p in t.GetProperties(flags))
+                            {
+                                if (!MemberMatches(p.Name, nameContains)) continue;
+                                MethodInfo acc = p.GetGetMethod(true) ?? p.GetSetMethod(true);
+                                results.Add(new Dictionary<string, object>
+                                {
+                                    { "assembly", asmName },
+                                    { "type", tname },
+                                    { "member", p.Name },
+                                    { "member_kind", "property" },
+                                    { "is_static", acc != null && acc.IsStatic },
+                                    { "signature", (p.PropertyType != null ? ShortName(p.PropertyType) : "?") + " " + p.Name
+                                        + (p.CanRead && p.CanWrite ? " { get; set; }" : (p.CanRead ? " { get; }" : " { set; }")) }
+                                });
+                            }
+                        }
+                        if (wantMethod)
+                        {
+                            foreach (MethodInfo m in t.GetMethods(flags))
+                            {
+                                if (m.IsSpecialName || !MemberMatches(m.Name, nameContains)) continue;
+                                var ps = new List<string>();
+                                foreach (ParameterInfo pi in m.GetParameters())
+                                {
+                                    Type pt = pi.ParameterType.IsByRef ? pi.ParameterType.GetElementType() : pi.ParameterType;
+                                    ps.Add(((pi.IsOut || pi.ParameterType.IsByRef) ? "out " : "") + ShortName(pt) + " " + pi.Name);
+                                }
+                                results.Add(new Dictionary<string, object>
+                                {
+                                    { "assembly", asmName },
+                                    { "type", tname },
+                                    { "member", m.Name },
+                                    { "member_kind", "method" },
+                                    { "is_static", m.IsStatic },
+                                    { "signature", ShortName(m.ReturnType) + " " + m.Name + "(" + string.Join(", ", ps.ToArray()) + ")" }
+                                });
+                            }
+                        }
+                    }
+                    catch { }
+                }
+            }
+            return results;
+        }
+
+        private static string ShortName(Type t)
+        {
+            if (t == null) return "?";
+            string n = t.FullName ?? t.Name;
+            int cut = n.IndexOf(',');
+            if (cut > 0) n = n.Substring(0, cut);
+            return n;
+        }
+
+        /// <summary>
+        /// P1-2: live instances of a type (singletons, managers, controllers...).
+        /// </summary>
+        public static List<Dictionary<string, object>> FindObjectsOfType(string assemblyName, string typeFullName)
+        {
+            Type type = ResolveType(assemblyName, typeFullName);
+            if (type == null)
+                throw new Exception("Type not found: " + typeFullName);
+            var results = new List<Dictionary<string, object>>();
+            foreach (UnityEngine.Object o in UnityEngine.Resources.FindObjectsOfTypeAll<UnityEngine.Object>())
+            {
+                if (o == null) continue;
+                bool match = false;
+                try { match = type.IsInstanceOfType(o); }
+                catch { continue; }
+                if (!match) continue;
+                var entry = new Dictionary<string, object>
+                {
+                    { "type", (o.GetType() != null && o.GetType().FullName != null) ? o.GetType().FullName : typeFullName },
+                    { "instance_id", o.GetInstanceID() },
+                    { "handle", Handle.Format(o.GetInstanceID()) }
+                };
+                try
+                {
+                    UnityEngine.GameObject go = o as UnityEngine.GameObject;
+                    if (go == null && o is UnityEngine.Component)
+                        go = ((UnityEngine.Component)o).gameObject;
+                    if (go != null)
+                    {
+                        entry["name"] = go.name;
+                        entry["scene"] = go.scene.name;
+                        entry["active"] = go.activeInHierarchy;
+                        entry["path"] = GetGameObjectPath(go);
+                    }
+                    else
+                    {
+                        entry["name"] = o.name;
+                    }
+                }
+                catch { }
+                results.Add(entry);
+            }
+            return results;
+        }
+
         private static List<Dictionary<string, object>> CapMembers(List<Dictionary<string, object>> all, int limit)
         {
             if (limit <= 0 || all.Count <= limit) return all;

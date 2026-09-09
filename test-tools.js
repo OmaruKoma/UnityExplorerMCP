@@ -36,7 +36,9 @@ server.stdout.on('data', (data) => {
         'unity_get_gameobject', 'unity_get_components', 'unity_inspect', 'unity_get_field',
         'unity_set_field', 'unity_get_property', 'unity_set_property', 'unity_invoke_method',
         'unity_hierarchy', 'unity_execute_csharp', 'unity_list_assemblies', 'unity_inspect_type',
-        'unity_invoke_static', 'unity_resolve_path', 'unity_tail_log', 'unity_capabilities'];
+        'unity_invoke_static', 'unity_resolve_path', 'unity_tail_log', 'unity_capabilities',
+        'unity_search_members', 'unity_find_objects_of_type', 'unity_get_static',
+        'unity_set_static', 'unity_list_hooks'];
       const names = response.result.tools.map(t => t.name);
       const missing = expected.filter(n => !names.includes(n));
       if (missing.length > 0) {
@@ -44,7 +46,7 @@ server.stdout.on('data', (data) => {
         server.kill();
         process.exit(1);
       }
-      console.log(`All ${expected.length} tools present (18 existing + unity_capabilities).`);
+      console.log(`All ${expected.length} tools present (19 existing + 5 Phase-3).`);
       server.kill();
       process.exit(0);
     }

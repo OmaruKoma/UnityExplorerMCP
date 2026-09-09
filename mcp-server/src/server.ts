@@ -507,6 +507,135 @@ class UnityExplorerMCPServer {
               required: [],
             },
           },
+          {
+            name: "unity_search_members",
+            description: "Search fields/properties/methods across loaded assemblies by name. Returns assembly/type/member/signature.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                name_contains: {
+                  type: "string",
+                  description: "Substring to search for in member names (required)",
+                },
+                type_filter: {
+                  type: "string",
+                  description: "Optional substring filter on type full names",
+                },
+                member_kind: {
+                  type: "string",
+                  description: "method, field, property or all (default all)",
+                },
+                assembly_filter: {
+                  type: "string",
+                  description: "Optional substring filter on assembly names",
+                },
+                limit: {
+                  type: "number",
+                  description: "Max results (default 50)",
+                },
+                cursor: {
+                  type: "number",
+                  description: "Start offset for pagination",
+                },
+              },
+              required: ["name_contains"],
+            },
+          },
+          {
+            name: "unity_find_objects_of_type",
+            description: "Find live instances of a type by full name (singletons, managers, controllers). Returns handles.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                type: {
+                  type: "string",
+                  description: "Full type name (e.g. Game.SomeManager)",
+                },
+                assembly: {
+                  type: "string",
+                  description: "Optional assembly name to resolve the type from",
+                },
+                limit: {
+                  type: "number",
+                  description: "Max results (default 100)",
+                },
+                cursor: {
+                  type: "number",
+                  description: "Start offset for pagination",
+                },
+              },
+              required: ["type"],
+            },
+          },
+          {
+            name: "unity_get_static",
+            description: "Read a static field or property by type and member name.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                type: {
+                  type: "string",
+                  description: "Full type name",
+                },
+                member: {
+                  type: "string",
+                  description: "Static field or property name",
+                },
+                assembly: {
+                  type: "string",
+                  description: "Optional assembly name to resolve the type from",
+                },
+                returnEncoding: {
+                  type: "string",
+                  description: "byte[] encoding: hex (default) or base64",
+                },
+              },
+              required: ["type", "member"],
+            },
+          },
+          {
+            name: "unity_set_static",
+            description: "Write a static field or property by type and member name.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                type: {
+                  type: "string",
+                  description: "Full type name",
+                },
+                member: {
+                  type: "string",
+                  description: "Static field or property name",
+                },
+                value: {
+                  description: "New value",
+                },
+                assembly: {
+                  type: "string",
+                  description: "Optional assembly name to resolve the type from",
+                },
+              },
+              required: ["type", "member", "value"],
+            },
+          },
+          {
+            name: "unity_list_hooks",
+            description: "List Harmony-patched methods in the runtime (read-only inventory: method + patch owners).",
+            inputSchema: {
+              type: "object",
+              properties: {
+                limit: {
+                  type: "number",
+                  description: "Max results (default 100)",
+                },
+                cursor: {
+                  type: "number",
+                  description: "Start offset for pagination",
+                },
+              },
+              required: [],
+            },
+          },
         ],
       };
     });
@@ -693,6 +822,51 @@ class UnityExplorerMCPServer {
 
           case "unity_capabilities":
             result = await this.bridge.request("capabilities");
+            break;
+
+          case "unity_search_members":
+            result = await this.bridge.request("search_members", {
+              name_contains: args?.name_contains,
+              type_filter: (args as any)?.type_filter,
+              member_kind: (args as any)?.member_kind,
+              assembly_filter: (args as any)?.assembly_filter,
+              limit: args?.limit,
+              cursor: args?.cursor,
+            });
+            break;
+
+          case "unity_find_objects_of_type":
+            result = await this.bridge.request("find_objects_of_type", {
+              type: args?.type,
+              assembly: (args as any)?.assembly,
+              limit: args?.limit,
+              cursor: args?.cursor,
+            });
+            break;
+
+          case "unity_get_static":
+            result = await this.bridge.request("get_static", {
+              type: args?.type,
+              member: (args as any)?.member,
+              assembly: (args as any)?.assembly,
+              returnEncoding: (args as any)?.returnEncoding ?? "hex",
+            });
+            break;
+
+          case "unity_set_static":
+            result = await this.bridge.request("set_static", {
+              type: args?.type,
+              member: (args as any)?.member,
+              value: (args as any)?.value,
+              assembly: (args as any)?.assembly,
+            });
+            break;
+
+          case "unity_list_hooks":
+            result = await this.bridge.request("list_hooks", {
+              limit: args?.limit,
+              cursor: args?.cursor,
+            });
             break;
 
           default:
