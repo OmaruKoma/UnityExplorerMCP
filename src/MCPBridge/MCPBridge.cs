@@ -31,6 +31,17 @@ namespace UnityExplorer.MCPBridge
         
         public int Port { get; private set; } = 12345;
 
+        // Authoritative bridge-side tool list (mirrored in unity_capabilities).
+        // Keep in sync with the dispatch switch in ProcessRequest.
+        internal static readonly string[] EnabledTools = new string[]
+        {
+            "ping", "scene_info", "find_gameobjects", "get_gameobject",
+            "get_components", "inspect", "get_field", "set_field",
+            "get_property", "set_property", "invoke_method", "hierarchy",
+            "execute_csharp", "list_assemblies", "inspect_type", "invoke_static",
+            "resolve_path", "capabilities"
+        };
+
         // Handle stabilization: instance_ids are process-local and die on
         // scene change/restart. SessionId lets callers detect staleness.
         private static int _sceneLoadCount = 0;
@@ -298,6 +309,7 @@ namespace UnityExplorer.MCPBridge
                     case "inspect_type": response = HandleInspectType(request); break;
                     case "invoke_static": response = HandleInvokeStatic(request); break;
                     case "resolve_path": response = HandleResolvePath(request); break;
+                    case "capabilities": response = HandleCapabilities(request); break;
                     default: response = new MCPResponse { Success = false, Error = "Unknown: " + request.Method }; break;
                 }
                 
@@ -389,23 +401,34 @@ namespace UnityExplorer.MCPBridge
             
             var results = new List<GameObjectInfo>();
             var allObjects = Resources.FindObjectsOfTypeAll<GameObject>();
-            
+
+            Paging.Params paging = null;
+            string contains = null;
+            if (request.Params is System.Text.Json.JsonElement pj)
+            {
+                paging = Paging.Read(pj, 0);
+                contains = paging.NameContains;
+            }
+
             foreach (var obj in allObjects)
             {
                 if (obj == null) continue;
                 try
                 {
-                    if (obj.transform != null && obj.transform.root != null && 
+                    if (obj.transform != null && obj.transform.root != null &&
                         obj.transform.root.name == "UniverseLibCanvas") continue;
-                    
+
                     if (!string.IsNullOrEmpty(name) && !obj.name.Contains(name)) continue;
-                    
+                    if (!string.IsNullOrEmpty(contains) && obj.name.IndexOf(contains, StringComparison.OrdinalIgnoreCase) < 0) continue;
+
                     if (!includeInactive && !obj.activeInHierarchy) continue;
-                    
+
+                    int id = obj.GetInstanceID();
                     results.Add(new GameObjectInfo
                     {
                         Name = obj.name,
-                        InstanceId = obj.GetInstanceID(),
+                        InstanceId = id,
+                        Handle = Handle.Format(id),
                         Scene = obj.scene.name,
                         Active = obj.activeInHierarchy,
                         Path = GetGameObjectPath(obj),
@@ -415,7 +438,12 @@ namespace UnityExplorer.MCPBridge
                 }
                 catch { }
             }
-            
+
+            if (paging != null && paging.Requested)
+            {
+                var page = Paging.Apply(results, paging, null);
+                return new MCPResponse { Success = true, Data = Paging.Envelope(page) };
+            }
             return new MCPResponse { Success = true, Data = results };
         }
         
@@ -440,6 +468,7 @@ namespace UnityExplorer.MCPBridge
             {
                 Name = obj.name,
                 InstanceId = obj.GetInstanceID(),
+                Handle = Handle.Format(obj.GetInstanceID()),
                 Scene = obj.scene.name,
                 Active = obj.activeInHierarchy,
                 Path = GetGameObjectPath(obj),
@@ -454,20 +483,24 @@ namespace UnityExplorer.MCPBridge
             
             if (obj.transform.parent != null)
             {
+                int pid = obj.transform.parent.gameObject.GetInstanceID();
                 info.Parent = new GameObjectInfo
                 {
                     Name = obj.transform.parent.gameObject.name,
-                    InstanceId = obj.transform.parent.gameObject.GetInstanceID()
+                    InstanceId = pid,
+                    Handle = Handle.Format(pid)
                 };
             }
-            
+
             for (int i = 0; i < obj.transform.childCount; i++)
             {
                 var child = obj.transform.GetChild(i).gameObject;
+                int cid = child.GetInstanceID();
                 info.Children.Add(new GameObjectInfo
                 {
                     Name = child.name,
-                    InstanceId = child.GetInstanceID(),
+                    InstanceId = cid,
+                    Handle = Handle.Format(cid),
                     Active = child.activeInHierarchy
                 });
             }
@@ -516,7 +549,14 @@ components.Add(new ComponentInfo
         private MCPResponse HandleInspect(MCPRequest request)
         {
             int instanceId = ExtractInstanceId(request);
-            
+            int memberLimit = 200;
+            if (request.Params is System.Text.Json.JsonElement pj)
+            {
+                System.Text.Json.JsonElement tmp;
+                if (pj.TryGetProperty("member_limit", out tmp) || pj.TryGetProperty("MemberLimit", out tmp))
+                { try { memberLimit = Math.Max(1, tmp.GetInt32()); } catch { } }
+            }
+
             var obj = FindObjectById(instanceId);
             if (obj == null)
                 return new MCPResponse { Success = false, Error = StaleHandleError(instanceId) + " (inspect)" };
@@ -651,7 +691,14 @@ components.Add(new ComponentInfo
             {
                 info.Fields.Add(new MemberInfoItem { Name = "Error", TypeName = "string", Value = ex.Message, IsStatic = false, CanWrite = false });
             }
-            
+
+            info.TotalFields = info.Fields.Count;
+            info.TotalMethods = info.Methods.Count;
+            if (info.Fields.Count > memberLimit)
+                info.Fields = info.Fields.GetRange(0, memberLimit);
+            if (info.Methods.Count > memberLimit)
+                info.Methods = info.Methods.GetRange(0, memberLimit);
+
             return new MCPResponse { Success = true, Data = info };
         }
         
@@ -715,6 +762,8 @@ components.Add(new ComponentInfo
         
         private MCPResponse HandleSetField(MCPRequest request)
         {
+            MCPResponse stale = ValidateWriteHandle(request);
+            if (stale != null) return stale;
             int instanceId = ExtractInstanceId(request);
             string fieldName = ExtractString(request, "field") ?? ExtractString(request, "Field");
             object valueObj = ExtractValue(request, "value") ?? ExtractValue(request, "Value");
@@ -764,6 +813,8 @@ components.Add(new ComponentInfo
         
         private MCPResponse HandleSetProperty(MCPRequest request)
         {
+            MCPResponse stale = ValidateWriteHandle(request);
+            if (stale != null) return stale;
             int instanceId = ExtractInstanceId(request);
             string propertyName = ExtractString(request, "property") ?? ExtractString(request, "Property");
             object valueObj = ExtractValue(request, "value") ?? ExtractValue(request, "Value");
@@ -790,6 +841,8 @@ components.Add(new ComponentInfo
         
         private MCPResponse HandleInvokeMethod(MCPRequest request)
         {
+            MCPResponse stale = ValidateWriteHandle(request);
+            if (stale != null) return stale;
             int instanceId = ExtractInstanceId(request);
             string typeName = ExtractString(request, "type") ?? ExtractString(request, "Type");
             string methodName = ExtractString(request, "method") ?? ExtractString(request, "Method");
@@ -877,6 +930,7 @@ components.Add(new ComponentInfo
         private MCPResponse HandleHierarchy(MCPRequest request)
         {
             int maxDepth = 10;
+            Paging.Params paging = null;
             if (request.Params is HierarchyParams hp) maxDepth = hp.MaxDepth;
             else if (request.Params is System.Text.Json.JsonElement j)
             {
@@ -886,22 +940,50 @@ components.Add(new ComponentInfo
                     if (maxDepth < 1) maxDepth = 1;
                     if (maxDepth > 20) maxDepth = 20;
                 }
+                paging = Paging.Read(j, 0);
             }
-            
+
+            string contains = paging != null ? paging.NameContains : null;
+            int budget = (paging != null && paging.Limit > 0) ? paging.Limit : int.MaxValue;
+            int used = 0;
+            bool truncated = false;
+
             var rootObjects = new List<HierarchyInfo>();
             for (int i = 0; i < SceneManager.sceneCount; i++)
             {
                 var scene = SceneManager.GetSceneAt(i);
                 if (!scene.isLoaded) continue;
                 foreach (var root in scene.GetRootGameObjects())
-                    rootObjects.Add(BuildHierarchy(root, 0, maxDepth));
+                {
+                    var node = BuildHierarchy(root, 0, maxDepth, contains, ref used, budget, ref truncated);
+                    if (node != null) rootObjects.Add(node);
+                    if (used >= budget) { truncated = true; break; }
+                }
+                if (used >= budget) { truncated = true; break; }
             }
-            
+
+            if (paging != null && paging.Requested)
+            {
+                return new MCPResponse
+                {
+                    Success = true,
+                    Data = new Dictionary<string, object>
+                    {
+                        { "items", rootObjects },
+                        { "truncated", truncated }
+                    }
+                };
+            }
             return new MCPResponse { Success = true, Data = rootObjects };
         }
-        
-        private HierarchyInfo BuildHierarchy(GameObject obj, int currentDepth, int maxDepth)
+
+        private HierarchyInfo BuildHierarchy(GameObject obj, int currentDepth, int maxDepth,
+            string contains, ref int used, int budget, ref bool truncated)
         {
+            if (used >= budget) { truncated = true; return null; }
+            bool selfMatch = string.IsNullOrEmpty(contains)
+                || obj.name.IndexOf(contains, StringComparison.OrdinalIgnoreCase) >= 0;
+
             var info = new HierarchyInfo
             {
                 Name = obj.name,
@@ -909,13 +991,22 @@ components.Add(new ComponentInfo
                 Active = obj.activeInHierarchy,
                 Children = new List<HierarchyInfo>()
             };
-            
+
             if (currentDepth < maxDepth)
             {
                 for (int i = 0; i < obj.transform.childCount; i++)
-                    info.Children.Add(BuildHierarchy(obj.transform.GetChild(i).gameObject, currentDepth + 1, maxDepth));
+                {
+                    if (used >= budget) { truncated = true; break; }
+                    var child = BuildHierarchy(obj.transform.GetChild(i).gameObject,
+                        currentDepth + 1, maxDepth, contains, ref used, budget, ref truncated);
+                    if (child != null) info.Children.Add(child);
+                }
             }
-            
+
+            // name_contains prunes subtrees with no match (ancestors of matches survive).
+            if (!selfMatch && info.Children.Count == 0) return null;
+            used++;
+            info.Handle = Handle.Format(info.InstanceId);
             return info;
         }
         
@@ -953,6 +1044,18 @@ components.Add(new ComponentInfo
             try
             {
                 var names = AssemblyInspector.ListAssemblies(filter);
+                if (request.Params is System.Text.Json.JsonElement pj)
+                {
+                    var paging = Paging.Read(pj, 0);
+                    if (paging.Requested)
+                    {
+                        var page = Paging.Apply(names, paging, null);
+                        var env = (Dictionary<string, object>)Paging.Envelope(page);
+                        env["assemblies"] = env["items"];
+                        env.Remove("items");
+                        return new MCPResponse { Success = true, Data = env };
+                    }
+                }
                 return new MCPResponse { Success = true, Data = new { assemblies = names, count = names.Count } };
             }
             catch (Exception ex) { return new MCPResponse { Success = false, Error = ex.ToString() }; }
@@ -966,7 +1069,17 @@ components.Add(new ComponentInfo
                 return new MCPResponse { Success = false, Error = "Missing 'type' parameter (full type name, e.g. System.Math)" };
             try
             {
-                var info = AssemblyInspector.InspectType(asm, type);
+                int memberLimit = 200;
+                string memberContains = null;
+                if (request.Params is System.Text.Json.JsonElement pj)
+                {
+                    System.Text.Json.JsonElement tmp;
+                    if (pj.TryGetProperty("member_limit", out tmp) || pj.TryGetProperty("MemberLimit", out tmp))
+                    { try { memberLimit = Math.Max(1, tmp.GetInt32()); } catch { } }
+                    if (pj.TryGetProperty("member_contains", out tmp) || pj.TryGetProperty("MemberContains", out tmp))
+                    { try { memberContains = tmp.GetString(); } catch { } }
+                }
+                var info = AssemblyInspector.InspectType(asm, type, memberLimit, memberContains);
                 return new MCPResponse { Success = true, Data = info };
             }
             catch (Exception ex) { return new MCPResponse { Success = false, Error = ex.ToString() }; }
@@ -1048,13 +1161,15 @@ components.Add(new ComponentInfo
                 var go = AssemblyInspector.ResolvePath(path);
                 if (go == null)
                     return new MCPResponse { Success = false, Error = "Path not found: " + path + " (session " + SessionId + ")" };
+                int freshId = go.GetInstanceID();
                 return new MCPResponse
                 {
                     Success = true,
                     Data = new GameObjectInfo
                     {
                         Name = go.name,
-                        InstanceId = go.GetInstanceID(),
+                        InstanceId = freshId,
+                        Handle = Handle.Format(freshId),
                         Scene = go.scene.name,
                         Active = go.activeInHierarchy,
                         Path = AssemblyInspector.GetGameObjectPath(go),
@@ -1064,6 +1179,60 @@ components.Add(new ComponentInfo
                 };
             }
             catch (Exception ex) { return new MCPResponse { Success = false, Error = ex.ToString() }; }
+        }
+
+        private MCPResponse HandleCapabilities(MCPRequest request)
+        {
+            string bepinExVersion = null;
+            try
+            {
+                foreach (Assembly asm in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    string n = null;
+                    try { n = asm.GetName().Name; } catch { continue; }
+                    if (n == "BepInEx" || n == "BepInEx.Core")
+                    {
+                        try { bepinExVersion = asm.GetName().Version.ToString(); } catch { }
+                        break;
+                    }
+                }
+            }
+            catch { }
+            return new MCPResponse
+            {
+                Success = true,
+                Data = new Dictionary<string, object>
+                {
+                    { "backend", BridgeConfig.Backend },
+                    { "loader", "BepInEx" },
+                    { "bepinex_version", bepinExVersion ?? "unknown" },
+                    { "bridge_version", "1.2.0" },
+                    { "unity_version", Application.unityVersion },
+                    { "session_id", SessionId },
+                    { "enabled_tools", new List<string>(EnabledTools) },
+                    { "limits", new Dictionary<string, object>
+                        {
+                            { "array_limit", BridgeConfig.ArrayLimit },
+                            { "string_limit", BridgeConfig.StringLimit },
+                            { "byte_limit", BridgeConfig.ByteLimit },
+                            { "request_timeout_ms", BridgeConfig.RequestTimeoutMs }
+                        }
+                    },
+                    { "marshalling", new Dictionary<string, object>
+                        {
+                            { "ref", true },
+                            { "out", true },
+                            { "byte_array", true },
+#if CPP
+                            { "il2cpp_array", true },
+#else
+                            { "il2cpp_array", false },
+#endif
+                            { "csharp_execute", true }
+                        }
+                    }
+                }
+            };
         }
         
         #endregion
@@ -1075,9 +1244,61 @@ components.Add(new ComponentInfo
             if (request.Params is System.Text.Json.JsonElement j)
             {
                 if (j.TryGetProperty("instance_id", out var idProp) || j.TryGetProperty("InstanceId", out idProp))
-                    return idProp.GetInt32();
+                {
+                    try
+                    {
+                        if (idProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                        {
+                            string s;
+                            int hid;
+                            if (Handle.TryParse(idProp.GetString(), out s, out hid)) return hid;
+                            return 0;
+                        }
+                        return idProp.GetInt32();
+                    }
+                    catch { return 0; }
+                }
+                string handleText = ExtractHandleText(request);
+                if (handleText != null)
+                {
+                    string sess;
+                    int hid;
+                    if (Handle.TryParse(handleText, out sess, out hid)) return hid;
+                }
             }
             return 0;
+        }
+
+        private string ExtractHandleText(MCPRequest request)
+        {
+            if (request.Params is System.Text.Json.JsonElement j)
+            {
+                System.Text.Json.JsonElement hp;
+                if (j.TryGetProperty("handle", out hp) || j.TryGetProperty("Handle", out hp))
+                {
+                    try
+                    {
+                        if (hp.ValueKind == System.Text.Json.JsonValueKind.String)
+                            return hp.GetString();
+                    }
+                    catch { }
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Session validation for write operations. Returns an error response
+        /// when a session-bound handle belongs to an older session (fast fail,
+        /// no object scan), otherwise null.
+        /// </summary>
+        private MCPResponse ValidateWriteHandle(MCPRequest request)
+        {
+            string handleText = ExtractHandleText(request);
+            if (string.IsNullOrEmpty(handleText)) return null;
+            StaleHandleError stale = Handle.Validate(handleText);
+            if (stale == null) return null;
+            return new MCPResponse { Success = false, Error = stale.Message, Data = stale.ToData() };
         }
         
         private string ExtractString(MCPRequest request, string propName)

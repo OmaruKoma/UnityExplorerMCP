@@ -152,6 +152,7 @@ namespace UnityExplorer.MCPBridge
     {
         public string Name { get; set; }
         public int InstanceId { get; set; }
+        public string Handle { get; set; }
         public string Scene { get; set; }
         public bool Active { get; set; }
         public string Path { get; set; }
@@ -198,6 +199,8 @@ namespace UnityExplorer.MCPBridge
         public List<MemberInfoItem> Fields { get; set; }
         public List<MemberInfoItem> Properties { get; set; }
         public List<MethodInfoItem> Methods { get; set; }
+        public int TotalFields { get; set; }
+        public int TotalMethods { get; set; }
     }
     
     public class MemberInfoItem
@@ -248,6 +251,7 @@ namespace UnityExplorer.MCPBridge
     {
         public string Name { get; set; }
         public int InstanceId { get; set; }
+        public string Handle { get; set; }
         public bool Active { get; set; }
         public List<HierarchyInfo> Children { get; set; }
     }

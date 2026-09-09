@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using UnityEngine;
@@ -88,7 +89,13 @@ namespace UnityExplorer.MCPBridge
             if (value == null) return null;
             Type t = value.GetType();
 
-            if (t == typeof(string) || t.IsPrimitive || t == typeof(decimal))
+            if (t == typeof(string))
+            {
+                string s = (string)value;
+                if (s.Length > BridgeConfig.StringLimit) return TruncateText(s);
+                return s;
+            }
+            if (t.IsPrimitive || t == typeof(decimal))
                 return value;
             if (t.IsEnum)
                 return value.ToString();
@@ -100,7 +107,7 @@ namespace UnityExplorer.MCPBridge
             if (value is System.Collections.IList list)
             {
                 int total = list.Count;
-                int take = Math.Min(total, 500);
+                int take = Math.Min(total, BridgeConfig.ArrayLimit);
                 var items = new List<object>(take);
                 for (int i = 0; i < take; i++)
                 {
@@ -124,22 +131,22 @@ namespace UnityExplorer.MCPBridge
                 {
                     var lenProp = t.GetProperty("Length") ?? t.GetProperty("Count");
                     int len = Convert.ToInt32(lenProp.GetValue(value, null));
-                    int take = Math.Min(len, 65536);
                     var indexer = t.GetProperty("Item");
                     if (indexer != null && len >= 0)
                     {
                         Type elemType = indexer.PropertyType;
                         if (elemType == typeof(byte))
                         {
-                            int n = Math.Min(len, 65536);
+                            int n = Math.Min(len, BridgeConfig.ByteLimit);
                             var bytes = new byte[n];
                             for (int i = 0; i < n; i++)
                                 bytes[i] = Convert.ToByte(indexer.GetValue(value, new object[] { i }));
                             var encoded = EncodeBytes(bytes, encoding);
                             encoded["length"] = len;
+                            if (len > n) encoded["truncated"] = true;
                             return encoded;
                         }
-                        int m = Math.Min(len, 500);
+                        int m = Math.Min(len, BridgeConfig.ArrayLimit);
                         var items = new List<object>(m);
                         for (int i = 0; i < m; i++)
                         {
@@ -177,11 +184,58 @@ namespace UnityExplorer.MCPBridge
         {
             bytes = bytes ?? new byte[0];
             bool b64 = string.Equals(encoding, "base64", StringComparison.OrdinalIgnoreCase);
+            if (bytes.Length > BridgeConfig.ByteLimit)
+            {
+                int headLen = Math.Min(2048, bytes.Length);
+                int tailLen = Math.Min(512, bytes.Length - headLen);
+                var head = new byte[headLen];
+                var tail = new byte[tailLen];
+                Array.Copy(bytes, 0, head, 0, headLen);
+                Array.Copy(bytes, bytes.Length - tailLen, tail, 0, tailLen);
+                return new Dictionary<string, object>
+                {
+                    { "encoding", b64 ? "base64" : "hex" },
+                    { "truncated", true },
+                    { "length", bytes.Length },
+                    { "sha256", Sha256Hex(bytes) },
+                    { "head", b64 ? Convert.ToBase64String(head) : ToHex(head) },
+                    { "tail", b64 ? Convert.ToBase64String(tail) : ToHex(tail) }
+                };
+            }
             return new Dictionary<string, object>
             {
                 { "encoding", b64 ? "base64" : "hex" },
                 { "data", b64 ? Convert.ToBase64String(bytes) : ToHex(bytes) }
             };
+        }
+
+        public static Dictionary<string, object> TruncateText(string s)
+        {
+            int headLen = Math.Min(4000, s.Length);
+            int tailLen = Math.Min(1000, s.Length - headLen);
+            return new Dictionary<string, object>
+            {
+                { "truncated", true },
+                { "length", s.Length },
+                { "sha256", Sha256Hex(Encoding.UTF8.GetBytes(s)) },
+                { "head", s.Substring(0, headLen) },
+                { "tail", tailLen > 0 ? s.Substring(s.Length - tailLen, tailLen) : "" }
+            };
+        }
+
+        public static string Sha256Hex(byte[] bytes)
+        {
+            try
+            {
+                using (SHA256 sha = SHA256.Create())
+                {
+                    byte[] hash = sha.ComputeHash(bytes ?? new byte[0]);
+                    var sb = new StringBuilder(hash.Length * 2);
+                    foreach (byte b in hash) sb.Append(b.ToString("x2"));
+                    return sb.ToString();
+                }
+            }
+            catch { return null; }
         }
 
         public static string ToHex(byte[] bytes)

@@ -80,6 +80,11 @@ namespace UnityExplorer.MCPBridge
 
         public static Dictionary<string, object> InspectType(string assemblyName, string typeFullName)
         {
+            return InspectType(assemblyName, typeFullName, 0, null);
+        }
+
+        public static Dictionary<string, object> InspectType(string assemblyName, string typeFullName, int memberLimit, string memberContains)
+        {
             Type type = ResolveType(assemblyName, typeFullName);
             if (type == null)
                 throw new Exception("Type not found: " + typeFullName +
@@ -89,6 +94,7 @@ namespace UnityExplorer.MCPBridge
             var fields = new List<Dictionary<string, object>>();
             foreach (FieldInfo f in type.GetFields(flags))
             {
+                if (!MemberMatches(f.Name, memberContains)) continue;
                 object val;
                 try { val = f.GetValue(null); if (!f.IsStatic) val = "<instance member; use unity_get_field with instance_id>"; }
                 catch (Exception ex) { val = "<error: " + ex.GetType().Name + ">"; }
@@ -104,6 +110,7 @@ namespace UnityExplorer.MCPBridge
             var props = new List<Dictionary<string, object>>();
             foreach (PropertyInfo p in type.GetProperties(flags))
             {
+                if (!MemberMatches(p.Name, memberContains)) continue;
                 MethodInfo accessor = p.GetGetMethod(true) ?? p.GetSetMethod(true);
                 props.Add(new Dictionary<string, object>
                 {
@@ -118,6 +125,7 @@ namespace UnityExplorer.MCPBridge
             foreach (MethodInfo m in type.GetMethods(flags))
             {
                 if (m.IsSpecialName) continue;
+                if (!MemberMatches(m.Name, memberContains)) continue;
                 var ps = new List<Dictionary<string, object>>();
                 foreach (ParameterInfo pi in m.GetParameters())
                 {
@@ -136,15 +144,35 @@ namespace UnityExplorer.MCPBridge
                     { "parameters", ps }
                 });
             }
-            return new Dictionary<string, object>
+            var result = new Dictionary<string, object>
             {
                 { "typeName", type.FullName },
                 { "assembly", type.Assembly.GetName().Name },
                 { "isEnum", type.IsEnum },
-                { "fields", fields },
-                { "properties", props },
-                { "methods", methods }
+                { "fields", CapMembers(fields, memberLimit) },
+                { "properties", CapMembers(props, memberLimit) },
+                { "methods", CapMembers(methods, memberLimit) }
             };
+            if (memberLimit > 0 && (fields.Count > memberLimit || props.Count > memberLimit || methods.Count > memberLimit))
+            {
+                result["truncated"] = true;
+                result["total_fields"] = fields.Count;
+                result["total_properties"] = props.Count;
+                result["total_methods"] = methods.Count;
+            }
+            return result;
+        }
+
+        private static bool MemberMatches(string name, string contains)
+        {
+            if (string.IsNullOrEmpty(contains)) return true;
+            return name != null && name.IndexOf(contains, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static List<Dictionary<string, object>> CapMembers(List<Dictionary<string, object>> all, int limit)
+        {
+            if (limit <= 0 || all.Count <= limit) return all;
+            return all.GetRange(0, limit);
         }
 
         public class StaticCall

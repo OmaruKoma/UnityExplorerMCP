@@ -36,7 +36,7 @@ server.stdout.on('data', (data) => {
         'unity_get_gameobject', 'unity_get_components', 'unity_inspect', 'unity_get_field',
         'unity_set_field', 'unity_get_property', 'unity_set_property', 'unity_invoke_method',
         'unity_hierarchy', 'unity_execute_csharp', 'unity_list_assemblies', 'unity_inspect_type',
-        'unity_invoke_static', 'unity_resolve_path', 'unity_tail_log'];
+        'unity_invoke_static', 'unity_resolve_path', 'unity_tail_log', 'unity_capabilities'];
       const names = response.result.tools.map(t => t.name);
       const missing = expected.filter(n => !names.includes(n));
       if (missing.length > 0) {
@@ -44,7 +44,7 @@ server.stdout.on('data', (data) => {
         server.kill();
         process.exit(1);
       }
-      console.log(`All ${expected.length} tools present (13 existing + 5 new).`);
+      console.log(`All ${expected.length} tools present (18 existing + unity_capabilities).`);
       server.kill();
       process.exit(0);
     }

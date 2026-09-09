@@ -110,7 +110,7 @@ class UnityExplorerMCPServer {
           },
           {
             name: "unity_find_gameobjects",
-            description: "Find GameObjects by name in the Unity scene",
+            description: "Find GameObjects by name in the Unity scene. Returns session-aware handles. Pass limit/cursor for large scenes.",
             inputSchema: {
               type: "object",
               properties: {
@@ -123,51 +123,79 @@ class UnityExplorerMCPServer {
                   description: "Include inactive GameObjects",
                   default: true,
                 },
+                limit: {
+                  type: "number",
+                  description: "Max items per page (envelope with next_cursor when set)",
+                },
+                cursor: {
+                  type: "number",
+                  description: "Start offset for pagination",
+                },
+                name_contains: {
+                  type: "string",
+                  description: "Additional case-insensitive substring filter",
+                },
               },
               required: [],
             },
           },
           {
             name: "unity_get_gameobject",
-            description: "Get detailed information about a specific GameObject",
+            description: "Get detailed information about a specific GameObject. Prefer handle (session:id) over instance_id.",
             inputSchema: {
               type: "object",
               properties: {
                 instance_id: {
                   type: "number",
-                  description: "Instance ID of the GameObject",
+                  description: "Instance ID of the GameObject (legacy; either this or handle)",
+                },
+                handle: {
+                  type: "string",
+                  description: "Session-aware handle (session:id), e.g. from find/resolve/hierarchy",
                 },
               },
-              required: ["instance_id"],
+              required: [],
             },
           },
           {
             name: "unity_get_components",
-            description: "Get all components attached to a GameObject",
+            description: "Get all components attached to a GameObject. Prefer handle over instance_id.",
             inputSchema: {
               type: "object",
               properties: {
                 instance_id: {
                   type: "number",
-                  description: "Instance ID of the GameObject",
+                  description: "Instance ID of the GameObject (legacy; either this or handle)",
+                },
+                handle: {
+                  type: "string",
+                  description: "Session-aware handle (session:id)",
                 },
               },
-              required: ["instance_id"],
+              required: [],
             },
           },
           {
             name: "unity_inspect",
-            description: "Inspect an object and get its fields, properties, and methods",
+            description: "Inspect an object and get its fields, properties, and methods (member lists capped, see member_limit)",
             inputSchema: {
               type: "object",
               properties: {
                 instance_id: {
                   type: "number",
-                  description: "Instance ID of the object",
+                  description: "Instance ID of the object (legacy; either this or handle)",
+                },
+                handle: {
+                  type: "string",
+                  description: "Session-aware handle (session:id)",
                 },
                 type_name: {
                   type: "string",
                   description: "Full type name (for static inspection)",
+                },
+                member_limit: {
+                  type: "number",
+                  description: "Max fields/methods returned (default 200)",
                 },
               },
               required: [],
@@ -175,13 +203,17 @@ class UnityExplorerMCPServer {
           },
           {
             name: "unity_get_field",
-            description: "Get the value of a field from an object",
+            description: "Get the value of a field from an object. Prefer handle over instance_id.",
             inputSchema: {
               type: "object",
               properties: {
                 instance_id: {
                   type: "number",
-                  description: "Instance ID of the object",
+                  description: "Instance ID of the object (legacy; either this or handle)",
+                },
+                handle: {
+                  type: "string",
+                  description: "Session-aware handle (session:id)",
                 },
                 type: {
                   type: "string",
@@ -197,13 +229,17 @@ class UnityExplorerMCPServer {
           },
           {
             name: "unity_set_field",
-            description: "Set the value of a field on an object",
+            description: "Set the value of a field on an object. Session-bound handles are validated (stale handles fail fast).",
             inputSchema: {
               type: "object",
               properties: {
                 instance_id: {
                   type: "number",
-                  description: "Instance ID of the object",
+                  description: "Instance ID of the object (legacy; either this or handle)",
+                },
+                handle: {
+                  type: "string",
+                  description: "Session-aware handle (session:id); session is validated",
                 },
                 type: {
                   type: "string",
@@ -222,13 +258,17 @@ class UnityExplorerMCPServer {
           },
           {
             name: "unity_get_property",
-            description: "Get the value of a property from an object",
+            description: "Get the value of a property from an object. Prefer handle over instance_id.",
             inputSchema: {
               type: "object",
               properties: {
                 instance_id: {
                   type: "number",
-                  description: "Instance ID of the object",
+                  description: "Instance ID of the object (legacy; either this or handle)",
+                },
+                handle: {
+                  type: "string",
+                  description: "Session-aware handle (session:id)",
                 },
                 type: {
                   type: "string",
@@ -244,13 +284,17 @@ class UnityExplorerMCPServer {
           },
           {
             name: "unity_set_property",
-            description: "Set the value of a property on an object",
+            description: "Set the value of a property on an object. Session-bound handles are validated (stale handles fail fast).",
             inputSchema: {
               type: "object",
               properties: {
                 instance_id: {
                   type: "number",
-                  description: "Instance ID of the object",
+                  description: "Instance ID of the object (legacy; either this or handle)",
+                },
+                handle: {
+                  type: "string",
+                  description: "Session-aware handle (session:id); session is validated",
                 },
                 type: {
                   type: "string",
@@ -269,13 +313,17 @@ class UnityExplorerMCPServer {
           },
           {
             name: "unity_invoke_method",
-            description: "Invoke a method on an object",
+            description: "Invoke a method on an object. Session-bound handles are validated (stale handles fail fast).",
             inputSchema: {
               type: "object",
               properties: {
                 instance_id: {
                   type: "number",
-                  description: "Instance ID of the object",
+                  description: "Instance ID of the object (legacy; either this or handle)",
+                },
+                handle: {
+                  type: "string",
+                  description: "Session-aware handle (session:id); session is validated",
                 },
                 type: {
                   type: "string",
@@ -296,7 +344,7 @@ class UnityExplorerMCPServer {
           },
           {
             name: "unity_hierarchy",
-            description: "Get the hierarchy of GameObjects in the scene",
+            description: "Get the hierarchy of GameObjects in the scene. Use name_contains/limit to keep output small.",
             inputSchema: {
               type: "object",
               properties: {
@@ -304,6 +352,14 @@ class UnityExplorerMCPServer {
                   type: "number",
                   description: "Maximum depth to traverse",
                   default: 10,
+                },
+                name_contains: {
+                  type: "string",
+                  description: "Keep only matching subtrees (ancestors of matches survive)",
+                },
+                limit: {
+                  type: "number",
+                  description: "Max nodes returned (response carries truncated flag when set)",
                 },
               },
               required: [],
@@ -329,13 +385,21 @@ class UnityExplorerMCPServer {
           },
           {
             name: "unity_list_assemblies",
-            description: "List loaded assemblies in the Unity runtime (optional substring filter)",
+            description: "List loaded assemblies in the Unity runtime (optional substring filter). Pass limit/cursor for paging.",
             inputSchema: {
               type: "object",
               properties: {
                 filter: {
                   type: "string",
                   description: "Optional case-insensitive substring filter on assembly name",
+                },
+                limit: {
+                  type: "number",
+                  description: "Max items per page (envelope with next_cursor when set)",
+                },
+                cursor: {
+                  type: "number",
+                  description: "Start offset for pagination",
                 },
               },
               required: [],
@@ -354,6 +418,14 @@ class UnityExplorerMCPServer {
                 assembly: {
                   type: "string",
                   description: "Optional assembly name to resolve the type from",
+                },
+                member_limit: {
+                  type: "number",
+                  description: "Max members per list (default 200)",
+                },
+                member_contains: {
+                  type: "string",
+                  description: "Case-insensitive substring filter on member names",
                 },
               },
               required: ["type"],
@@ -426,6 +498,15 @@ class UnityExplorerMCPServer {
               required: [],
             },
           },
+          {
+            name: "unity_capabilities",
+            description: "Discover the live runtime backend (IL2CPP/Mono), session, enabled tools, limits and marshalling support. Call this first.",
+            inputSchema: {
+              type: "object",
+              properties: {},
+              required: [],
+            },
+          },
         ],
       };
     });
@@ -485,31 +566,39 @@ class UnityExplorerMCPServer {
             result = await this.bridge.request("find_gameobjects", {
               name: args?.name,
               include_inactive: args?.include_inactive ?? true,
+              limit: args?.limit,
+              cursor: args?.cursor,
+              name_contains: args?.name_contains,
             });
             break;
 
           case "unity_get_gameobject":
             result = await this.bridge.request("get_gameobject", {
               instance_id: args?.instance_id,
+              handle: args?.handle,
             });
             break;
 
           case "unity_get_components":
             result = await this.bridge.request("get_components", {
               instance_id: args?.instance_id,
+              handle: args?.handle,
             });
             break;
 
           case "unity_inspect":
             result = await this.bridge.request("inspect", {
               instance_id: args?.instance_id,
+              handle: args?.handle,
               type_name: args?.type_name,
+              member_limit: args?.member_limit,
             });
             break;
 
           case "unity_get_field":
             result = await this.bridge.request("get_field", {
               instance_id: args?.instance_id,
+              handle: args?.handle,
               type: args?.type,
               field: args?.field,
             });
@@ -518,6 +607,7 @@ class UnityExplorerMCPServer {
           case "unity_set_field":
             result = await this.bridge.request("set_field", {
               instance_id: args?.instance_id,
+              handle: args?.handle,
               type: args?.type,
               field: args?.field,
               value: args?.value,
@@ -527,6 +617,7 @@ class UnityExplorerMCPServer {
           case "unity_get_property":
             result = await this.bridge.request("get_property", {
               instance_id: args?.instance_id,
+              handle: args?.handle,
               type: args?.type,
               property: args?.property,
             });
@@ -535,6 +626,7 @@ class UnityExplorerMCPServer {
           case "unity_set_property":
             result = await this.bridge.request("set_property", {
               instance_id: args?.instance_id,
+              handle: args?.handle,
               type: args?.type,
               property: args?.property,
               value: args?.value,
@@ -544,6 +636,7 @@ class UnityExplorerMCPServer {
           case "unity_invoke_method":
             result = await this.bridge.request("invoke_method", {
               instance_id: args?.instance_id,
+              handle: args?.handle,
               type: args?.type,
               method: args?.method,
               args: args?.args,
@@ -553,6 +646,8 @@ class UnityExplorerMCPServer {
           case "unity_hierarchy":
             result = await this.bridge.request("hierarchy", {
               max_depth: args?.max_depth ?? 10,
+              name_contains: args?.name_contains,
+              limit: args?.limit,
             });
             break;
 
@@ -566,6 +661,8 @@ class UnityExplorerMCPServer {
           case "unity_list_assemblies":
             result = await this.bridge.request("list_assemblies", {
               filter: args?.filter,
+              limit: args?.limit,
+              cursor: args?.cursor,
             });
             break;
 
@@ -573,6 +670,8 @@ class UnityExplorerMCPServer {
             result = await this.bridge.request("inspect_type", {
               type: args?.type,
               assembly: args?.assembly,
+              member_limit: args?.member_limit,
+              member_contains: args?.member_contains,
             });
             break;
 
@@ -590,6 +689,10 @@ class UnityExplorerMCPServer {
             result = await this.bridge.request("resolve_path", {
               path: args?.path,
             });
+            break;
+
+          case "unity_capabilities":
+            result = await this.bridge.request("capabilities");
             break;
 
           default:

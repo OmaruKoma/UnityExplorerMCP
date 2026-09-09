@@ -302,6 +302,129 @@ async function testResolvePath() {
   }
 }
 
+async function testCapabilities() {
+  console.log('\nTesting capabilities (P0-1)...');
+
+  try {
+    const response = await axios.post(UNITY_BRIDGE_URL, {
+      method: 'capabilities',
+      params: {}
+    }, { timeout: 10000 });
+
+    const d = payload(response);
+    const backend = process.env.UNITY_BACKEND || 'IL2CPP';
+    if (ok(response) && d.backend && d.session_id && Array.isArray(d.enabled_tools)
+        && d.limits && d.marshalling && d.marshalling.out === true) {
+      console.log(`✓ capabilities: backend=${d.backend} (expect ${backend}), tools=${d.enabled_tools.length}, limits=${JSON.stringify(d.limits)}`);
+      if (d.backend !== backend) {
+        console.log(`  NOTE: backend mismatch (bridge says ${d.backend}, test expects ${backend})`);
+      }
+      return true;
+    } else {
+      console.log('✗ capabilities error:', errMsg(response) || 'missing fields');
+      return false;
+    }
+  } catch (error) {
+    console.log('✗ capabilities failed:', error.message);
+    return false;
+  }
+}
+
+async function testSessionHandle() {
+  console.log('\nTesting session-aware handle (P0-2)...');
+
+  try {
+    // Fresh handle round-trip via resolve_path.
+    const find = await axios.post(UNITY_BRIDGE_URL, {
+      method: 'find_gameobjects',
+      params: { name: '', include_inactive: true, limit: 5 }
+    }, { timeout: 10000 });
+
+    const page = payload(find);
+    const items = page.items || page;
+    if (!ok(find) || !items || items.length === 0 || !items[0].Handle) {
+      console.log('✗ session handle skipped: no Handle in find response');
+      return false;
+    }
+    const handle = items[0].Handle;
+    if (handle.indexOf('#') < 0 || handle.indexOf(':') < 0) {
+      console.log('✗ bad handle format:', handle);
+      return false;
+    }
+    // Use the handle on a read.
+    const get = await axios.post(UNITY_BRIDGE_URL, {
+      method: 'get_gameobject',
+      params: { handle }
+    }, { timeout: 10000 });
+    if (!ok(get) || payload(get).InstanceId !== items[0].InstanceId) {
+      console.log('✗ handle read error:', errMsg(get) || 'ID mismatch');
+      return false;
+    }
+    // Stale handle must fail fast with STALE_HANDLE on a write.
+    const stale = await axios.post(UNITY_BRIDGE_URL, {
+      method: 'invoke_method',
+      params: { handle: 'NoScene#999:12345', method: 'ToString', args: [] }
+    }, { timeout: 10000 });
+    const sdata = payload(stale) || {};
+    if (!ok(stale) && sdata.code === 'STALE_HANDLE' && sdata.current_session && sdata.suggest === 'resolve_path') {
+      console.log(`✓ handle OK (${handle}); stale write fast-fails with STALE_HANDLE`);
+      return true;
+    } else {
+      console.log('✗ stale handle error:', errMsg(stale) || JSON.stringify(sdata));
+      return false;
+    }
+  } catch (error) {
+    console.log('✗ session handle failed:', error.message);
+    return false;
+  }
+}
+
+async function testPagination() {
+  console.log('\nTesting pagination (P0-3)...');
+
+  try {
+    const response = await axios.post(UNITY_BRIDGE_URL, {
+      method: 'find_gameobjects',
+      params: { name: '', include_inactive: true, limit: 3, cursor: 0 }
+    }, { timeout: 15000 });
+
+    const d = payload(response);
+    if (!ok(response) || !d.items || d.items.length > 3 || typeof d.total !== 'number') {
+      console.log('✗ pagination error:', errMsg(response) || 'bad envelope');
+      return false;
+    }
+    let cursorOk = true;
+    if (d.next_cursor != null) {
+      const page2 = await axios.post(UNITY_BRIDGE_URL, {
+        method: 'find_gameobjects',
+        params: { name: '', include_inactive: true, limit: 3, cursor: d.next_cursor }
+      }, { timeout: 15000 });
+      const d2 = payload(page2);
+      cursorOk = ok(page2) && d2.items && d2.items.length > 0
+        && d2.items[0].InstanceId !== d.items[0].InstanceId;
+    }
+    const hier = await axios.post(UNITY_BRIDGE_URL, {
+      method: 'hierarchy',
+      params: { max_depth: 2, limit: 5 }
+    }, { timeout: 15000 });
+    const h = payload(hier);
+    if (!ok(hier) || !h.items || !('truncated' in h)) {
+      console.log('✗ hierarchy paging error:', errMsg(hier) || 'bad envelope');
+      return false;
+    }
+    if (cursorOk) {
+      console.log(`✓ pagination OK (find total=${d.total}, hierarchy truncated=${h.truncated})`);
+      return true;
+    } else {
+      console.log('✗ cursor page mismatch');
+      return false;
+    }
+  } catch (error) {
+    console.log('✗ pagination failed:', error.message);
+    return false;
+  }
+}
+
 async function testMCPServer() {
   console.log('\nTesting MCP Server tool registration (spawn stdio)...');
 
@@ -322,7 +445,7 @@ async function testMCPServer() {
         if (response.result && response.result.tools) {
           clearTimeout(timer);
           const names = response.result.tools.map(t => t.name);
-          const expected = 18;
+          const expected = 19;
           console.log(`✓ MCP Server registered ${names.length} tools`);
           server.kill();
           resolve(names.length === expected);
@@ -338,6 +461,9 @@ async function testMCPServer() {
 async function runTests() {
   console.log('=== UnityExplorer MCP Bridge Test ===\n');
 
+  const backend = process.env.UNITY_BACKEND || 'IL2CPP';
+  console.log(`Backend under test: ${backend}\n`);
+
   const results = {
     unityBridge: await testUnityBridge(),
     sceneInfo: await testSceneInfo(),
@@ -350,6 +476,9 @@ async function runTests() {
     invokeStatic: await testInvokeStatic(),
     invokeOutParam: await testInvokeStaticOutParam(),
     resolvePath: await testResolvePath(),
+    capabilities: await testCapabilities(),
+    sessionHandle: await testSessionHandle(),
+    pagination: await testPagination(),
     mcpServer: await testMCPServer()
   };
 
@@ -358,8 +487,12 @@ async function runTests() {
     console.log(`${v ? '✓ PASS' : '✗ FAIL'}  ${k}`);
   }
 
-  const allPassed = Object.values(results).every(r => r);
-  console.log(`\nOverall: ${allPassed ? '✓ ALL TESTS PASSED' : '✗ SOME TESTS FAILED'}`);
+  const passed = Object.values(results).filter(r => r === true).length;
+  const failed = Object.values(results).filter(r => r === false).length;
+  console.log(`\nBackend: ${backend} | Passed: ${passed} | Failed: ${failed} | Skipped: 0`);
+
+  const allPassed = failed === 0;
+  console.log(`Overall: ${allPassed ? '✓ ALL TESTS PASSED' : '✗ SOME TESTS FAILED'}`);
 
   process.exit(allPassed ? 0 : 1);
 }
