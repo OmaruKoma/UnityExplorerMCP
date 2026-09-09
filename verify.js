@@ -25,6 +25,7 @@ const checks = [
   { name: 'MCPBridge.csproj', path: 'src\\MCPBridge\\MCPBridge.csproj', required: true },
   { name: 'MCPBridge.IL2CPP.dll', path: 'dist\\il2cpp\\MCPBridge.IL2CPP.dll', required: true },
   { name: 'MCPBridge.Mono.dll', path: 'dist\\mono\\MCPBridge.Mono.dll', required: true },
+  { name: 'MCPBridge.Mono.dll (BepInEx 5)', path: 'dist\\mono-bepinex5\\MCPBridge.Mono.dll', required: true },
   
   // MCP Server files
   { name: 'server.ts', path: 'mcp-server\\src\\server.ts', required: true },

@@ -20,7 +20,7 @@
       MonoRefRoot    : default ../../UnityExplorer/lib/net35
       BepInExMonoDir : default $(MonoRefRoot)/BepInEx/build647+
       BepInEx 5 users: -p:BepInExMonoFlavor=BIE5 and point MonoRefRoot at a dir
-                       containing BepInEx.dll + UnityEngine.dll (BepInEx.Unity ref is skipped).
+                       containing BepInEx/BepInEx.dll + UnityEngine.dll (BepInEx.Unity ref is skipped).
   -->
   <PropertyGroup>
     <Configurations>Release_IL2CPP;Release_Mono</Configurations>
@@ -66,6 +66,8 @@
     <MonoRefRoot Condition="'$(MonoRefRoot)'==''">$(MONO_REF_ROOT)</MonoRefRoot>
     <MonoRefRoot Condition="'$(MonoRefRoot)'==''">$(MSBuildProjectDirectory)/../../UnityExplorer/lib/net35</MonoRefRoot>
     <BepInExMonoDir Condition="'$(BepInExMonoDir)'==''">$(MonoRefRoot)/BepInEx/build647+</BepInExMonoDir>
+    <!-- Exact BepInEx 5 assembly for version-pinned rebuilds (default: vendored 5.4.x). -->
+    <BepInEx5Ref Condition="'$(BepInEx5Ref)'==''">$(MonoRefRoot)/BepInEx/BepInEx.dll</BepInEx5Ref>
     <McsMonoRef Condition="'$(McsMonoRef)'==''">$(MonoRefRoot)/mcs.dll</McsMonoRef>
   </PropertyGroup>
 
@@ -79,7 +81,7 @@
   </Target>
 
   <Target Name="CheckMonoRefs" BeforeTargets="BeforeBuild" Condition="'$(Configuration)'=='Release_Mono'">
-    <Error Condition="!Exists('$(BepInExMonoDir)/BepInEx.Core.dll') and !Exists('$(MonoRefRoot)/BepInEx.dll')"
+    <Error Condition="!Exists('$(BepInExMonoDir)/BepInEx.Core.dll') and !Exists('$(MonoRefRoot)/BepInEx/BepInEx.dll') and !Exists('$(MonoRefRoot)/BepInEx.dll')"
            Text="BepInEx Mono references not found. Set MONO_REF_ROOT (or MonoRefRoot/BepInExMonoDir) to a BepInEx 6 Unity Mono install or the UnityExplorer lib/net35 folder." />
     <Error Condition="!Exists('$(MonoRefRoot)/UnityEngine.dll')"
            Text="Managed UnityEngine.dll not found in '$(MonoRefRoot)'. Mono builds need the game's Managed/ folder or UnityExplorer lib/net35." />
@@ -149,7 +151,7 @@
 
   <ItemGroup Condition="'$(Configuration)'=='Release_Mono' and '$(BepInExMonoFlavor)'!='BIPUNITY'">
     <Reference Include="BepInEx">
-      <HintPath>$(MonoRefRoot)/BepInEx.dll</HintPath>
+      <HintPath>$(BepInEx5Ref)</HintPath>
       <Private>False</Private>
     </Reference>
   </ItemGroup>

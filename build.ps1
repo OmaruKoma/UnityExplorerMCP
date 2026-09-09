@@ -2,7 +2,8 @@
 #
 #   .\build.ps1                       # IL2CPP + Mono + MCP Server
 #   .\build.ps1 -Backend IL2CPP       # IL2CPP backend only
-#   .\build.ps1 -Backend Mono         # Mono backend only
+#   .\build.ps1 -Backend Mono         # Mono backend, BepInEx 6 Unity Mono
+#   .\build.ps1 -Backend MonoBepInEx5 # Mono backend, BepInEx 5 (Unity 5.x-2019.x era games)
 #
 # Reference locations are resolved by src/MCPBridge/MCPBridge.csproj from
 # environment variables / MSBuild properties (no hardcoded paths):
@@ -10,7 +11,7 @@
 #   MONO_REF_ROOT   : BepInEx Mono refs (install, game Managed/, or UnityExplorer lib/net35)
 
 param(
-    [ValidateSet("All", "IL2CPP", "Mono", "Server")]
+    [ValidateSet("All", "IL2CPP", "Mono", "MonoBepInEx5", "Server")]
     [string]$Backend = "All"
 )
 
@@ -18,9 +19,9 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 function Invoke-BridgeBuild {
-    param([string]$Config, [string]$Label)
+    param([string]$Config, [string]$Label, [string[]]$ExtraArgs = @())
     Write-Host "Building MCP Bridge ($Label)..." -ForegroundColor Green
-    dotnet build "$RepoRoot\src\MCPBridge\MCPBridge.csproj" -c $Config
+    dotnet build "$RepoRoot\src\MCPBridge\MCPBridge.csproj" -c $Config @ExtraArgs
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Failed to build MCP Bridge ($Label)"
         exit 1
@@ -32,7 +33,11 @@ if ($Backend -eq "All" -or $Backend -eq "IL2CPP") {
 }
 
 if ($Backend -eq "All" -or $Backend -eq "Mono") {
-    Invoke-BridgeBuild -Config "Release_Mono" -Label "Mono"
+    Invoke-BridgeBuild -Config "Release_Mono" -Label "Mono (BepInEx 6)"
+}
+
+if ($Backend -eq "MonoBepInEx5") {
+    Invoke-BridgeBuild -Config "Release_Mono" -Label "Mono (BepInEx 5)" -ExtraArgs @("-p:BepInExMonoFlavor=BIE5", "-p:OutputPath=..\..\dist\mono-bepinex5\")
 }
 
 if ($Backend -eq "All" -or $Backend -eq "Server") {
@@ -58,6 +63,9 @@ if ($Backend -eq "All" -or $Backend -eq "IL2CPP") {
 }
 if ($Backend -eq "All" -or $Backend -eq "Mono") {
     Write-Host "  Mono Bridge:   dist\mono\MCPBridge.Mono.dll (+ mcs.dll)"
+}
+if ($Backend -eq "MonoBepInEx5") {
+    Write-Host "  Mono Bridge:   dist\mono-bepinex5\MCPBridge.Mono.dll (+ mcs.dll)"
 }
 if ($Backend -eq "All" -or $Backend -eq "Server") {
     Write-Host "  MCP Server:    mcp-server\dist\server.js"
