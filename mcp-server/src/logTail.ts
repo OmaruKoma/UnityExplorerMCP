@@ -19,7 +19,6 @@ export interface TailLogResult {
 
 const DEFAULT_GAME_ROOTS = [
   process.env.UNITY_GAME_ROOT || "",
-  "D:\\F95 Game\\aidealrays\\Aidealrays_Ver_2.1",
 ];
 
 /**
@@ -42,8 +41,11 @@ export async function tailLog(opts: TailLogOptions = {}): Promise<TailLogResult>
       }
     }
     if (!filePath) {
-      const fallback = path.join(DEFAULT_GAME_ROOTS[1], "BepInEx", "LogOutput.log");
-      filePath = fallback;
+      throw new Error(
+        "No log path given and UNITY_GAME_ROOT is not set. " +
+        "Pass the game root dir or full BepInEx/LogOutput.log path via 'path', " +
+        "or set the UNITY_GAME_ROOT environment variable."
+      );
     }
   } else if (fs.existsSync(filePath) && fs.statSync(filePath).isDirectory()) {
     filePath = path.join(filePath, "BepInEx", "LogOutput.log");

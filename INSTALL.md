@@ -1,130 +1,135 @@
-# 安装说明
+# Installation
 
-## 前提条件
+> All paths below are relative to your local clone of this repository.
+> Replace `<GAME_ROOT>` with the folder of your Unity game (the one containing `BepInEx/`).
 
-- Unity 游戏
-- UnityExplorer (从 https://github.com/yukieiji/UnityExplorer 下载)
-- BepInEx 或 MelonLoader
-- Node.js (用于 MCP Server)
-- .NET SDK (用于编译 MCP Bridge)
+## Requirements
 
-## 步骤 1: 编译 MCP Bridge
+- A Unity game with **BepInEx** installed (IL2CPP or Mono) and **UnityExplorer** loaded
+- **Node.js 18+** (MCP Server)
+- **.NET SDK** (building the C# bridge)
+
+## Step 1: Build
 
 ```powershell
-cd D:\codespace\UnityExplorerMCP
+git clone <repository-url>
+cd UnityExplorerMCP
 .\build.ps1
 ```
 
-或者手动编译：
+Build backends separately if needed:
 
 ```powershell
-cd src\MCPBridge
-dotnet build -c Release
+.\build.ps1 -Backend IL2CPP        # dist/il2cpp/MCPBridge.IL2CPP.dll
+.\build.ps1 -Backend Mono          # dist/mono/MCPBridge.Mono.dll (BepInEx 6 Unity Mono)
+.\build.ps1 -Backend MonoBepInEx5  # dist/mono-bepinex5/MCPBridge.Mono.dll (BepInEx 5)
+.\build.ps1 -Backend Server        # mcp-server only
 ```
 
-## 步骤 2: 安装 MCP Bridge
+Reference assemblies resolve from environment variables (no hardcoded paths):
 
-### BepInEx
+| Variable | Meaning | Default |
+|---|---|---|
+| `UNITY_GAME_DIR` | IL2CPP game root with `BepInEx/` | — (required for IL2CPP builds) |
+| `MONO_REF_ROOT` | BepInEx Mono refs (`BepInEx/`, `UnityEngine.dll`, `mcs.dll`) | `UnityExplorer/lib/net35` (sibling checkout) |
 
-将编译好的 DLL 复制到 BepInEx 插件目录：
+Example:
 
 ```powershell
-Copy-Item "src\MCPBridge\bin\Release\UnityExplorer.MCPBridge.dll" "BepInEx\plugins\sinai-dev-UnityExplorer\"
+$env:UNITY_GAME_DIR = "<GAME_ROOT>"
+.\build.ps1 -Backend IL2CPP
 ```
 
-### MelonLoader
+## Step 2: Install the bridge DLL
 
-将编译好的 DLL 复制到 MelonLoader Mods 目录：
+Copy **both** files (the C# engine `mcs.dll` is required for `execute_csharp`):
+
+| Game runtime | Copy from | Copy to |
+|---|---|---|
+| IL2CPP (BepInEx 6) | `dist/il2cpp/` | `<GAME_ROOT>/BepInEx/plugins/` |
+| Mono (BepInEx 6 Unity Mono) | `dist/mono/` | `<GAME_ROOT>/BepInEx/plugins/` |
+| Mono (BepInEx 5) | `dist/mono-bepinex5/` | `<GAME_ROOT>/BepInEx/plugins/` |
 
 ```powershell
-Copy-Item "src\MCPBridge\bin\Release\UnityExplorer.MCPBridge.dll" "Mods\"
+Copy-Item "dist\mono-bepinex5\MCPBridge.Mono.dll", "dist\mono-bepinex5\mcs.dll" "<GAME_ROOT>\BepInEx\plugins\"
 ```
 
-## 步骤 3: 安装 MCP Server
+Restart the game after copying (BepInEx loads plugins at startup only).
+Confirm in `BepInEx/LogOutput.log`:
+
+```text
+MCP Bridge plugin loaded (Mono backend)
+```
+
+MelonLoader is not covered in this phase; use a BepInEx setup.
+
+## Step 3: Configure an MCP client
+
+Copy the matching example and replace `<REPO_PATH>` / `<GAME_ROOT_WITH_BEPINEX>`:
+
+- OpenCode: `opencode-example.json` → your `opencode.json`
+- Claude Desktop: `claude_desktop_config.example.json` → Claude's config file
+- Cursor: `cursor-mcp.example.json` → Cursor's MCP config
+
+Environment variables (all optional except where noted):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `UNITY_BRIDGE_URL` | `http://127.0.0.1:12345` | Bridge address (protocol default, keep as-is for local games) |
+| `MCP_BRIDGE_PORT` | `12345` | Bridge listen port, read in-game (match with `UNITY_BRIDGE_URL`) |
+| `REQUEST_TIMEOUT` | `30000` | MCP Server request timeout (ms) |
+| `UNITY_GAME_ROOT` | — | Game root for `unity_tail_log` auto-detection |
+| `MCP_ARRAY_LIMIT` | `500` | Max inlined array items (bridge) |
+| `MCP_OUTPUT_LIMIT` | `8192` | Max string chars before truncation (bridge) |
+| `MCP_BYTE_LIMIT` | `32768` | Max raw bytes before truncation (bridge) |
+
+## Step 4: Run
+
+1. Start the Unity game (UnityExplorer + MCP Bridge loaded)
+2. Start your MCP client (it launches `mcp-server/dist/server.js` via stdio)
+3. In the agent, start with `unity_capabilities`, then explore
+
+## Step 5: Verify
 
 ```powershell
-cd mcp-server
-npm install
-npm run build
+node test.js                    # live bridge tests (needs the game running)
+node test-tools.js              # MCP tool registration (no game needed)
+node verify.js                  # repo file integrity
 ```
 
-## 步骤 4: 配置 OpenCode
-
-将 `opencode.json` 复制到你的项目根目录：
+Run backend-specific tests with:
 
 ```powershell
-Copy-Item "opencode.json" "你的项目目录\"
-```
-
-或者将以下内容添加到你现有的 OpenCode 配置中：
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "unity": {
-      "type": "local",
-      "command": ["node", "C:\\UnityExplorerMCP\\mcp-server\\dist\\server.js"],
-      "enabled": true,
-      "environment": {
-        "UNITY_BRIDGE_URL": "http://127.0.0.1:12345",
-        "REQUEST_TIMEOUT": "30000"
-      }
-    }
-  }
-}
-```
-
-## 步骤 5: 启动
-
-1. **启动 Unity 游戏** - 确保 UnityExplorer 已加载
-2. **启动 MCP Server**:
-   ```powershell
-   cd mcp-server
-   npm start
-   ```
-3. **启动 OpenCode**:
-   ```powershell
-   opencode
-   ```
-
-## 步骤 6: 验证
-
-运行测试脚本验证安装：
-
-```powershell
+$env:UNITY_BACKEND = "Mono"     # or "IL2CPP" (default)
 node test.js
 ```
 
-或者在 OpenCode 中测试：
+## Troubleshooting
 
-```
-use unity_ping to check connection
-```
+### Bridge DLL not loaded
 
-## 故障排除
+- The DLL must match the loader: BepInEx 5 games need the `mono-bepinex5` build
+  (a BepInEx 6 build is silently skipped by the BepInEx 5 chainloader — check the
+  plugin count in the log).
+- `mcs.dll` must sit next to the bridge DLL or `execute_csharp` is unavailable.
 
-### MCP Bridge 未加载
+### Requests time out while the game loads
 
-1. 检查 Unity 控制台是否有错误信息
-2. 确保 DLL 文件放在正确的目录
-3. 确保 UnityExplorer 已正确加载
+Scene loads block Unity's main thread; the bridge answers again once loading
+finishes. Short-timeout tests may fail during loads — re-run when idle.
 
-### MCP Server 无法启动
+### `execute_csharp` reports CS0584 (mcs internal error)
 
-1. 确保已安装 Node.js
-2. 运行 `npm install` 安装依赖
-3. 运行 `npm run build` 编译 TypeScript
-4. 检查端口 12345 是否被占用
+The Mono.CSharp compiler enumerates referenced assemblies for extension-method
+resolution and chokes on stripped UnityEngine interop stubs (UnityExplorer's own
+C# Console has the same quirk). Prefer `foreach` loops over LINQ-on-`Type[]`.
 
-### OpenCode 无法连接到 MCP Server
+### C# evaluator unavailable (SRE stripped)
 
-1. 确保 MCP Server 正在运行
-2. 检查 `opencode.json` 配置是否正确
-3. 确保 Node.js 路径正确
+Follow UnityExplorer's corelibs procedure
+(`https://unity.bepinex.dev/corlibs/`) for your Unity version.
 
-## 卸载
+## Uninstall
 
-1. 从插件目录删除 `UnityExplorer.MCPBridge.dll`
-2. 从项目目录删除 `opencode.json`
-3. 删除 `mcp-server` 目录
+1. Delete `MCPBridge.*.dll` + `mcs.dll` from the game's `BepInEx/plugins/`
+2. Remove the `unity` MCP server entry from your client config

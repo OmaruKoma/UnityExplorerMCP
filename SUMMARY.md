@@ -81,7 +81,7 @@ Unity Runtime
 ### 6. 配置 OpenCode
 
 **新增文件：**
-- `opencode.json` - OpenCode 配置
+- `opencode-example.json` - OpenCode 配置示例
 
 **配置：**
 ```json
@@ -89,7 +89,7 @@ Unity Runtime
   "mcp": {
     "unity": {
       "type": "local",
-      "command": ["node", "C:\\UnityExplorerMCP\\mcp-server\\dist\\server.js"],
+      "command": ["node", "<REPO_PATH>/mcp-server/dist/server.js"],
       "enabled": true,
       "environment": {
         "UNITY_BRIDGE_URL": "http://127.0.0.1:12345",
@@ -113,20 +113,16 @@ Unity Runtime
 ### 1. 编译 MCP Bridge
 
 ```powershell
-cd D:\codespace\UnityExplorerMCP
+cd /path/to/UnityExplorerMCP
 .\build.ps1
 ```
 
 ### 2. 安装 MCP Bridge
 
-**BepInEx:**
-```powershell
-Copy-Item "src\MCPBridge\bin\Release\UnityExplorer.MCPBridge.dll" "BepInEx\plugins\sinai-dev-UnityExplorer\"
-```
+**BepInEx:**（详见 `INSTALL.md` 的后端对照表）
 
-**MelonLoader:**
 ```powershell
-Copy-Item "src\MCPBridge\bin\Release\UnityExplorer.MCPBridge.dll" "Mods\"
+Copy-Item "dist\mono-bepinex5\MCPBridge.Mono.dll", "dist\mono-bepinex5\mcs.dll" "<GAME_ROOT>\BepInEx\plugins\"
 ```
 
 ### 3. 安装 MCP Server
@@ -137,9 +133,9 @@ npm install
 npm run build
 ```
 
-### 4. 配置 OpenCode
+### 4. 配置 MCP 客户端
 
-将 `opencode.json` 复制到项目根目录。
+以 `opencode-example.json`（或 Claude / Cursor 示例）为模板，填入本机路径。
 
 ### 5. 启动
 
@@ -209,7 +205,7 @@ UnityExplorerMCP/
 │   └── tsconfig.json
 ├── UnityExplorer/                # UnityExplorer 源码
 ├── build.ps1                     # 构建脚本
-├── opencode.json                 # OpenCode 配置
+├── opencode-example.json         # OpenCode 配置示例（另有 Claude / Cursor 示例）
 ├── test.js                       # 测试脚本
 ├── README.md                     # 项目说明
 └── INSTALL.md                    # 安装说明

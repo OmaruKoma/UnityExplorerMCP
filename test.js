@@ -320,8 +320,10 @@ async function testCapabilities() {
 
     const d = payload(response);
     const backend = process.env.UNITY_BACKEND || 'IL2CPP';
+    // Backend-divergent assertion: il2cpp_array marshalling only exists on IL2CPP.
+    const il2cppArrayOk = d.marshalling && d.marshalling.il2cpp_array === (backend === 'IL2CPP');
     if (ok(response) && d.backend && d.session_id && Array.isArray(d.enabled_tools)
-        && d.limits && d.marshalling && d.marshalling.out === true) {
+        && d.limits && d.marshalling && d.marshalling.out === true && il2cppArrayOk) {
       console.log(`✓ capabilities: backend=${d.backend} (expect ${backend}), tools=${d.enabled_tools.length}, limits=${JSON.stringify(d.limits)}`);
       if (d.backend !== backend) {
         console.log(`  NOTE: backend mismatch (bridge says ${d.backend}, test expects ${backend})`);

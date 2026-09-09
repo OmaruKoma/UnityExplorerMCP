@@ -1,173 +1,261 @@
-# UnityExplorer MCP Bridge
+# UnityExplorerMCP
 
-让 OpenCode 通过 MCP 协议与运行中的 Unity 游戏交互，覆盖场景查看与逆向调试（C# 执行、类型自省、静态调用、日志流）。
+English | [简体中文](README.zh-CN.md)
 
-## 支持的 UnityExplorer 分支
+**UnityExplorerMCP is a runtime MCP bridge for Unity games.** It exposes UnityExplorer's runtime inspection, reflection and C# execution capabilities to MCP-compatible AI agents — for runtime debugging, exploration, experimentation and AI-assisted mod development.
 
-| 分支 | 版本 | 状态 |
-|------|------|------|
-| [yukieiji/UnityExplorer](https://github.com/yukieiji/UnityExplorer) | 4.12.7 | ✅ 已测试 |
-| [sinai-dev/UnityExplorer](https://github.com/sinai-dev/UnityExplorer) | 4.12.7 | ✅ 兼容 |
+This is **not** a Unity Editor MCP and **not** an OpenCode-exclusive project. OpenCode is one supported MCP client.
 
-> 基于 BepInEx 6.0 (IL2CPP + .NET 6 CoreCLR) 构建，Unity 版本 2022.3.x
+Typical flow:
 
-## 架构
-
-```
-OpenCode → MCP Server (Node.js) → HTTP → MCP Bridge (C# DLL) → Unity API
-```
-
-- **MCP Bridge** (`MCPBridge.dll` + `mcs.dll`): 注入 Unity 游戏进程，监听 `127.0.0.1:12345`，所有 Unity API 调用都在主线程执行
-- **MCP Server** (`server.js`): 外部 Node.js 进程，转发 MCP 协议请求；`unity_tail_log` 由它直接读磁盘，不经过游戏
-
-## MCP 工具列表
-
-| 工具名 | 说明 |
-|--------|------|
-| `unity_ping` | 测试连接（返回 `SessionId`，格式 `场景名#计数`，用于识别句柄是否过期） |
-| `unity_scene_info` | 获取当前场景信息（含 `SessionId`） |
-| `unity_find_gameobjects` | 按名字查找 GameObject（返回 `Path`，配合 `resolve_path` 使用） |
-| `unity_get_gameobject` | 获取 GameObject 详情（位置、父子关系等） |
-| `unity_get_components` | 获取 GameObject 上所有组件 |
-| `unity_inspect` | 检查对象的字段、属性、方法 |
-| `unity_get_field` | 获取字段值 |
-| `unity_set_field` | 设置字段值 |
-| `unity_get_property` | 获取属性值 |
-| `unity_set_property` | 设置属性值 |
-| `unity_invoke_method` | 调用方法（实例/static 均可；支持重载解析，`out/ref` 经 `outArgs` 返回） |
-| `unity_hierarchy` | 获取场景层级结构 |
-| `unity_execute_csharp` | 执行 C# 代码（桥自带 Mono.CSharp 编译执行，byte[] 返回默认 hex） |
-| `unity_list_assemblies` | 列出已加载程序集（可选子串过滤） |
-| `unity_inspect_type` | 按类型全名自省：字段/属性/方法签名（含 static/instance、参数与返回类型） |
-| `unity_invoke_static` | 调用 static 方法；`out/ref` 参数经 `outArgs` 返回，byte[] 按 hex/base64 封送 |
-| `unity_resolve_path` | 按 Hierarchy 路径（如 `Root/Child`）重新解析出新鲜 `instance_id` |
-| `unity_tail_log` | 读 BepInEx `LogOutput.log` 尾部（Node 本地共享读，不锁游戏；游戏未启动也能用） |
-
-## 安装
-
-### 1. Unity 端 (MCP Bridge)
-
-编译后把 **两个文件** 都复制到插件目录（`mcs.dll` 是 C# 执行引擎，缺了它 `execute_csharp` 不可用）：
-
-```
-src\MCPBridge\bin\Release\MCPBridge.dll  →  <游戏目录>/BepInEx/plugins/MCPBridge.dll
-src\MCPBridge\bin\Release\mcs.dll         →  <游戏目录>/BepInEx/plugins/mcs.dll
+```text
+Running Unity Game
+        ↓
+UnityExplorer (runtime exploration layer)
+        ↓
+UnityExplorerMCP (agent interface)
+        ↓
+MCP Client / AI Agent (OpenCode, Claude, Cursor, ...)
+        ↓
+Inspect Runtime → Experiment → Verify
+        ↓
+Create a standalone Mod
 ```
 
-> BepInEx 只在启动时加载插件：覆盖 DLL 后必须重启游戏。`LogOutput.log` 看到 `MCP Bridge plugin loaded` 即加载成功。
+UnityExplorer can be used as the runtime exploration layer during development. The final mod does not need to depend on UnityExplorer unless the mod itself requires it.
 
-### 2. OpenCode 端 (MCP Server)
+## Features
 
-在 `opencode.json` 中添加 MCP 配置：
+- Runtime inspection (GameObjects, components, fields, properties, methods)
+- Reflection and type discovery across loaded assemblies
+- Field / property access, method invocation, static access
+- C# execution inside the running game (self-hosted Mono.CSharp, no UI dependency)
+- Session-aware runtime object handles (`session:id`, stale handles fail fast)
+- Capability discovery (`unity_capabilities` — call it first)
+- Paginated, LLM-sized outputs (limits, cursors, truncation with sha256)
+- Read-only Harmony hook inventory
+- BepInEx log tailing without locking the game
+
+## Architecture
+
+```text
+                MCP Client
+        ┌──────────┼──────────┐
+     OpenCode    Claude     Cursor
+        │          │           │
+        └──────────┼───────────┘
+                   ↓ (stdio)
+              MCP Server (Node.js)
+                   ↓ (HTTP, 127.0.0.1:12345)
+              MCP Bridge (C# DLL, in-game)
+                   ↓
+            Runtime Backend
+             ┌─────┴──────┐
+             │            │
+           Mono        IL2CPP
+             │            │
+             └─────┬──────┘
+                   ↓
+     UnityExplorer / Unity Runtime
+```
+
+The bridge executes every Unity API call on the game's main thread. Tool-layer code is
+backend-neutral; IL2CPP-only paths (`il2cpp_*`, raw marshalling) are isolated behind
+`#if CPP`. The Mono backend (net35, no `System.Text.Json`) ships a minimal compatible
+JSON layer so call sites stay identical.
+
+## Supported Runtimes
+
+| Feature | IL2CPP (BepInEx 6) | Mono (BepInEx 5) | Mono (BepInEx 6) |
+|---|---|---|---|
+| Runtime inspection | ✅ live-tested | ✅ live-tested | build only |
+| Reflection / type discovery | ✅ | ✅ | build only |
+| Field / property access | ✅ | ✅ | build only |
+| Method invocation (incl. `out`/`ref`) | ✅ | ✅ | build only |
+| Static invocation + static field access | ✅ | ✅ | build only |
+| C# execution | ✅ | ✅ | build only |
+| Object handles + sessions | ✅ | ✅ | build only |
+| Capabilities / pagination / truncation | ✅ | ✅ | build only |
+| Harmony hook inventory (read-only) | ✅ | ✅ | build only |
+| Log tail | ✅ (server-side) | ✅ (server-side) | ✅ (server-side) |
+
+Live-tested on Unity 2022.3 (IL2CPP) and Unity 2019.4 (Mono, BepInEx 5.4).
+BepInEx 6 Mono builds from the same sources but has no live runtime test yet —
+runtime differences, if any, are reported truthfully by `unity_capabilities`.
+
+Related but distinct: **Runtime MCP** (this project, live game process) vs **Unity Editor MCP**
+(Editor automation) vs **UnityExplorer** (in-game UI explorer) vs **MCP Client**
+(the agent host) vs **BepInEx** (the mod loader) vs **Mono / IL2CPP** (scripting backends).
+
+## Requirements
+
+- A Unity game with **BepInEx** (IL2CPP or Mono) and **UnityExplorer** loaded
+- **Node.js 18+** (MCP Server)
+- **.NET SDK** (building the C# bridge)
+
+## Installation
+
+See [INSTALL.md](INSTALL.md) for the full guide. Short version:
+
+```powershell
+git clone <repository-url>
+cd UnityExplorerMCP
+.\build.ps1                       # IL2CPP + Mono + MCP Server
+```
+
+```powershell
+.\build.ps1 -Backend IL2CPP       # dist/il2cpp/MCPBridge.IL2CPP.dll
+.\build.ps1 -Backend Mono         # dist/mono/MCPBridge.Mono.dll (BepInEx 6 Unity Mono)
+.\build.ps1 -Backend MonoBepInEx5 # dist/mono-bepinex5/MCPBridge.Mono.dll (BepInEx 5)
+```
+
+Copy the matching `MCPBridge.*.dll` **plus `mcs.dll`** to `<GAME_ROOT>/BepInEx/plugins/`,
+restart the game, and confirm `MCP Bridge plugin loaded` in `BepInEx/LogOutput.log`.
+
+Reference assemblies resolve from environment variables (`UNITY_GAME_DIR`,
+`MONO_REF_ROOT`) — the repo contains no machine-specific paths.
+
+## MCP Client Configuration
+
+OpenCode is one supported client. Copy the matching example and replace
+`<REPO_PATH>` / `<GAME_ROOT_WITH_BEPINEX>`:
+
+### OpenCode
+
+`opencode-example.json` → your `opencode.json`:
 
 ```json
 {
   "mcp": {
     "unity": {
       "type": "local",
-      "command": ["node", "D:\\codespace\\UnityExplorerMCP\\mcp-server\\dist\\server.js"],
+      "command": ["node", "<REPO_PATH>/mcp-server/dist/server.js"],
       "enabled": true,
       "environment": {
         "UNITY_BRIDGE_URL": "http://127.0.0.1:12345",
-        "REQUEST_TIMEOUT": "30000",
-        "UNITY_GAME_ROOT": "D:\\F95 Game\\aidealrays\\Aidealrays_Ver_2.1"
+        "REQUEST_TIMEOUT": "30000"
       }
     }
   }
 }
 ```
 
-`UNITY_GAME_ROOT` 可选：给 `unity_tail_log` 做默认日志路径自动定位，不配也能用 `path` 参数显式指定。
+### Claude
 
-## 使用方法
+See `claude_desktop_config.example.json` (standard `mcpServers` format).
 
-1. 启动 Unity 游戏（MCP Bridge 自动加载）
-2. 启动 OpenCode
-3. 直接使用自然语言与 Unity 游戏交互
+### Cursor
 
-场景查看示例：
-- "查看当前场景有哪些 GameObject"
-- "找到玩家对象并获取它的位置"
-- "修改某个变量的值"
+See `cursor-mcp.example.json` (standard `mcpServers` format).
 
-逆向调试示例：
-- "列出已加载程序集里名字带 IKA 的" → `unity_list_assemblies`
-- "看下 `IKA9nt.Encrypter.EncrypterCore` 有哪些静态方法" → `unity_inspect_type`
-- "调 `System.Math.Max(3,5)` 试试桥通不通" → `unity_invoke_static`
-- "调带 out 参数的方法，把 out 值也拿回来" → `unity_invoke_static`（看 `outArgs`）
-- "返回 byte[] 的方法，用 hex 给我" → `unity_invoke_static` / `unity_execute_csharp`（`returnEncoding: hex|base64`）
-- "刚才的 instance_id 失效了，按路径重新解析" → `unity_resolve_path`（`find` 返回的 `Path` 直接拿来用）
-- "把 BepInEx 日志最后 50 行拿来，过滤包含 password 的" → `unity_tail_log`
+## Available Tools
 
-## 封送规则（invoke / execute_csharp 统一）
+24 tools. Start every session with `unity_capabilities`.
 
-- 字符串与基础类型 → JSON 原生值
-- `byte[]` / `Il2CppStructArray<byte>` → `{ encoding, data }`（默认 hex，可选 base64）
-- 数组 / `List<T>` / Il2Cpp 数组 → `{ length, items }`（最多内联 500 项）
-- `out`/`ref` 参数 → 调用后随 `outArgs: [{ index, name, type, value }]` 一并返回；传参时可用 `null` 占位，也可省略纯 out 参数（紧凑写法）
-- 未知对象 → `{ type, instance_id, preview }` 句柄；`{ instance_id }` 可作为后续调用的参数传回
-- 游戏侧异常 → 原样返回异常类型 + 信息 + Il2Cpp 堆栈（不再是一句 `IL2CPP Exception occurred`）
+| Tool | Purpose |
+|---|---|
+| `unity_capabilities` | Backend, session, tools, limits, marshalling |
+| `unity_ping` / `unity_scene_info` | Connectivity, scene, session |
+| `unity_find_gameobjects` | Find by name (handles, `limit`/`cursor`) |
+| `unity_get_gameobject` / `unity_get_components` | Details, components |
+| `unity_inspect` / `unity_inspect_type` | Members with static/instance info (`member_limit`) |
+| `unity_search_members` | Cross-assembly member search |
+| `unity_find_objects_of_type` | Live instances (singletons, managers) |
+| `unity_get_field` / `unity_set_field` | Instance fields |
+| `unity_get_property` / `unity_set_property` | Instance properties |
+| `unity_get_static` / `unity_set_static` | Static fields/properties |
+| `unity_invoke_method` / `unity_invoke_static` | Calls (`out`/`ref` via `outArgs`) |
+| `unity_resolve_path` | Fresh handle from a Hierarchy path |
+| `unity_hierarchy` | Scene tree (`max_depth`, `name_contains`, `limit`) |
+| `unity_list_assemblies` | Assembly list (`filter`, paging) |
+| `unity_list_hooks` | Harmony patch inventory (read-only) |
+| `unity_execute_csharp` | C# in the running game |
+| `unity_tail_log` | BepInEx log tail (local, no game needed) |
 
-## 句柄稳定性
+Object identity uses session-aware handles (`Shop#1:-33814`); writes validate the
+session and stale handles fail fast with `STALE_HANDLE`. Large outputs are paged
+(`limit`/`cursor`) or truncated (`truncated`/`length`/`sha256`/`head`/`tail`).
 
-`instance_id`（Unity `GetInstanceID()`）是进程内临时编号，场景切换/重启游戏即失效。失效时桥会明确报错并提示用 `resolve_path`，而不会静默返回空：
+## Runtime Exploration Workflow
 
+```text
+unity_capabilities
+        ↓
+unity_search_members
+        ↓
+unity_find_objects_of_type
+        ↓
+inspect
+        ↓
+get_field / get_property
+        ↓
+invoke_method / invoke_static
+        ↓
+execute_csharp
+        ↓
+observe runtime results
 ```
-Stale handle -126: object destroyed or scene changed (session Top#0).
-Re-run find_gameobjects or resolve_path with the Hierarchy path instead of guessing IDs.
-```
 
-推荐流程：`find_gameobjects` 拿 `Path` → `resolve_path` 换新鲜 `instance_id` → 再 `get/inspect/invoke`。`ping` 返回的 `SessionId` 变了就说明旧句柄全过期。
+## Modding Workflow
 
-## 环境要求
+Explore with the bridge, verify behavior live, then write the final mod as an
+independent BepInEx plugin. Use `unity_tail_log` to watch your mod's logs and
+`unity_list_hooks` to confirm patch state.
 
-- **Unity 游戏**: BepInEx 6.0 (IL2CPP) + .NET 6 CoreCLR
-- **OpenCode**: Node.js 18+
-- **操作系统**: Windows
+## Configuration
 
-## 常见问题
+| Variable | Default | Scope |
+|---|---|---|
+| `UNITY_BRIDGE_URL` | `http://127.0.0.1:12345` | Server → bridge address (protocol default) |
+| `MCP_BRIDGE_PORT` | `12345` | Bridge listen port, read in-game (match with `UNITY_BRIDGE_URL`) |
+| `REQUEST_TIMEOUT` | `30000` | Server request timeout (ms) |
+| `UNITY_GAME_ROOT` | — | Game root for `unity_tail_log` auto-detection |
+| `MCP_ARRAY_LIMIT` | `500` | Max inlined array items (bridge) |
+| `MCP_OUTPUT_LIMIT` | `8192` | Max string chars before truncation (bridge) |
+| `MCP_BYTE_LIMIT` | `32768` | Max raw bytes before truncation (bridge) |
+| `UNITY_BACKEND` | `IL2CPP` | `test.js` expectation label |
+| `UNITY_GAME_DIR` / `MONO_REF_ROOT` | — | Build-time reference locations |
 
-### 连接失败
-确保游戏已启动且 MCP Bridge 已加载（查看 `BepInEx/LogOutput.log` 确认，或直接用 `unity_tail_log` 看）。
+## Troubleshooting
 
-### execute_csharp 编译报错 CS0584（mcs 内部错误）
-mcs 在解析扩展方法/LINQ 时会枚举全部已引用程序集，遇到被裁剪的 UnityEngine interop 存根会失败——UnityExplorer 自家 C# Console 有同款问题。改用 `foreach` 循环写法即可，功能不受影响。
+- **Bridge DLL not loaded**: match the DLL to the loader — BepInEx 5 games silently
+  skip BepInEx 6 builds (check the plugin count in the log). `mcs.dll` must sit
+  next to the bridge DLL for `execute_csharp`.
+- **Timeouts during loads**: scene loads block Unity's main thread; re-run when idle.
+- **`execute_csharp` CS0584**: prefer `foreach` over LINQ-on-`Type[]` (mcs quirk with
+  stripped interop stubs, shared with UnityExplorer's own console).
+- **SRE stripped**: follow UnityExplorer's corelibs procedure for your Unity version.
 
-### C# evaluator 不可用
-桥初始化失败时会返回明确原因。IL2CPP 下若提示 `NotSupportedException`（SRE 被裁剪），按 UnityExplorer 官方做法补 corlibs：从 https://unity.bepinex.dev/corlibs/ 下载对应 Unity 版本的 `mscorlib.dll`，放到游戏 `*_Data/Managed/` 或 doorstop `corlibs` 目录。
+## Limitations
 
-### 崩溃
-某些游戏可能需要额外的兼容性配置。用 `unity_tail_log` 看日志排查问题。
+- Localhost only (`127.0.0.1`); no auth, no public exposure by design.
+- No arbitrary Harmony patching (inventory is read-only).
+- No screenshots / input simulation (Editor-MCP territory, out of scope).
+- MelonLoader is not covered in this phase.
+- BepInEx 6 Mono backend builds but has no live runtime test yet.
 
-## 验证
+## Security / Safety
+
+The bridge listens on loopback only and executes arbitrary C# the agent sends —
+treat it like a debugger: run only against games you own, on your own machine.
+`set_*` / `invoke_*` mutate live runtime state; prefer inspection first.
+
+## Development
 
 ```powershell
-node test.js        # 桥 HTTP 全链路（含 P0/P1/P3 真机用例）
-node test-tools.js  # MCP 工具注册检查（18 个）
-node verify.js      # 文件完整性检查
+.\build.ps1 -Backend Server      # mcp-server only
+node test.js                     # live bridge tests (game running)
+$env:UNITY_BACKEND = "Mono"; node test.js
+node test-tools.js               # tool registration (no game needed)
+node verify.js                   # repo integrity
 ```
 
-## 文件结构
+## Building
 
-```
-UnityExplorerMCP/
-├── src/MCPBridge/
-│   ├── MCPBridge.cs          # Bridge 主逻辑（请求分发、Il2Cpp 调用、会话计数）
-│   ├── CSharpExecutor.cs     # P0：自带 Mono.CSharp 编译执行
-│   ├── AssemblyInspector.cs  # P1：程序集/类型自省、静态解析、路径解析
-│   ├── ValueSerializer.cs    # P3：封送规则、对象注册表、Il2Cpp 线程 attach
-│   ├── MCPBridgePlugin.cs    # BepInEx 6 插件入口
-│   ├── DTO.cs                # 数据模型
-│   └── MCPBridge.csproj      # 编译配置（含 mcs.dll 引用）
-├── mcp-server/
-│   ├── src/server.ts         # MCP Server 源码（18 工具定义与转发）
-│   ├── src/logTail.ts        # P2：日志尾部读取（共享读）
-│   └── dist/                 # 编译输出
-├── test.js                   # 桥测试（含新工具真机用例）
-├── test-tools.js             # 工具注册测试
-├── verify.js                 # 完整性校验
-└── opencode.json             # OpenCode 配置示例
-```
+One SDK-style project, two configurations: `Release_IL2CPP` (net6) and
+`Release_Mono` (net35). Shared sources; backend differences via `CPP`/`MONO`
+defines following UnityExplorer's own convention. Outputs go to
+`dist/il2cpp`, `dist/mono`, `dist/mono-bepinex5`.
 
 ## License
 

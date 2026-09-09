@@ -9,7 +9,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const BASE_DIR = 'D:\\codespace\\UnityExplorerMCP';
+const BASE_DIR = __dirname;
 
 console.log('=== UnityExplorer MCP Integration Verification ===\n');
 
@@ -36,11 +36,14 @@ const checks = [
   { name: 'Compiled server.js', path: 'mcp-server\\dist\\server.js', required: true },
   
   // Configuration
-  { name: 'opencode.json', path: 'opencode.json', required: true },
+  { name: 'opencode-example.json', path: 'opencode-example.json', required: true },
+  { name: 'claude_desktop_config.example.json', path: 'claude_desktop_config.example.json', required: true },
+  { name: 'cursor-mcp.example.json', path: 'cursor-mcp.example.json', required: true },
   { name: '.env', path: 'mcp-server\\.env', required: false },
   
   // Documentation
   { name: 'README.md', path: 'README.md', required: true },
+  { name: 'README.zh-CN.md', path: 'README.zh-CN.md', required: true },
   { name: 'INSTALL.md', path: 'INSTALL.md', required: true },
   { name: 'SUMMARY.md', path: 'SUMMARY.md', required: true },
   
@@ -89,11 +92,10 @@ console.log(`Overall: ${allPassed ? '✓ ALL CHECKS PASSED' : '✗ SOME CHECKS F
 if (allPassed) {
   console.log('\n=== Next Steps ===');
   console.log('1. Compile MCP Bridge: .\\build.ps1');
-  console.log('2. Copy DLL to BepInEx/MelonLoader plugin directory');
+  console.log('2. Copy the matching dist/<backend> DLL + mcs.dll to the game BepInEx/plugins/');
   console.log('3. Start Unity game with UnityExplorer');
-  console.log('4. Start MCP Server: cd mcp-server && npm start');
-  console.log('5. Configure OpenCode with opencode.json');
-  console.log('6. Start OpenCode and use unity_* tools');
+  console.log('4. Configure your MCP client from opencode-example.json (or Claude/Cursor examples)');
+  console.log('5. Start the client and begin with unity_capabilities');
 }
 
 process.exit(allPassed ? 0 : 1);

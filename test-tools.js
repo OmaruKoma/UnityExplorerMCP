@@ -1,8 +1,9 @@
 const { spawn } = require('child_process');
+const path = require('path');
 
-// Start MCP Server
+// Start MCP Server (paths resolved from this script's location — no hardcoded dirs)
 const server = spawn('node', ['dist/server.js'], {
-  cwd: 'D:\\codespace\\UnityExplorerMCP\\mcp-server',
+  cwd: path.join(__dirname, 'mcp-server'),
   stdio: ['pipe', 'pipe', 'pipe']
 });
 

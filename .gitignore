@@ -9,3 +9,5 @@ bin/
 obj/
 UnityExplorer/
 *.env
+# Local MCP client config (copy from opencode-example.json and fill in your paths)
+opencode.json

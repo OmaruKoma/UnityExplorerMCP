@@ -110,6 +110,16 @@ namespace UnityExplorer.MCPBridge
         {
             try
             {
+                int port = 12345;
+                try
+                {
+                    string raw = Environment.GetEnvironmentVariable("MCP_BRIDGE_PORT");
+                    int parsed;
+                    if (!string.IsNullOrEmpty(raw) && int.TryParse(raw, out parsed)
+                        && parsed > 0 && parsed < 65536) port = parsed;
+                }
+                catch { }
+                Port = port;
                 _tcpListener = new TcpListener(IPAddress.Loopback, Port);
                 _tcpListener.Start();
                 
