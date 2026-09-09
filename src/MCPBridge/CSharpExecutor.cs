@@ -88,7 +88,7 @@ namespace UnityExplorer.MCPBridge
             _eval.Run("using System.Collections.Generic;");
             _eval.Run("using System.Reflection;");
             _eval.Run("using UnityEngine;");
-            _output.GetStringBuilder().Clear();
+            _output.GetStringBuilder().Length = 0;
         }
 
         public class ExecResult
@@ -109,7 +109,7 @@ namespace UnityExplorer.MCPBridge
             {
                 try
                 {
-                    _output.GetStringBuilder().Clear();
+                    _output.GetStringBuilder().Length = 0;
                     int errorsBefore = _printer.ErrorsCount;
 
                     CompiledMethod repl = null;

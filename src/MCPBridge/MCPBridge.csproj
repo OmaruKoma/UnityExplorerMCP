@@ -1,6 +1,30 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    UnityExplorerMCP dual-backend build.
+    Configurations:
+      Release_IL2CPP : net6  BepInEx 6 IL2CPP  -> dist/il2cpp/MCPBridge.IL2CPP.dll
+      Release_Mono   : net35 BepInEx 6 Unity Mono (BIPUNITY) -> dist/mono/MCPBridge.Mono.dll
+
+    No machine-specific paths are committed. Reference locations resolve in order:
+      1. MSBuild property  (dotnet build -p:UnityGameDir="D:/Games/MyGame" ...)
+      2. Environment variable of the same name
+      3. Portable relative default (UnityExplorer/lib when checked out alongside)
+
+    IL2CPP game files:
+      UnityGameDir         : game root containing BepInEx/ (interop + core)
+      BepInExIl2CppCoreDir : default $(UnityGameDir)/BepInEx/core
+      Il2CppInteropDir     : default $(UnityGameDir)/BepInEx/interop
+      McsIl2CppRef         : default ../../UnityExplorer/lib/net6/mcs.dll
+
+    Mono reference files (BepInEx 6 Unity Mono, net35):
+      MonoRefRoot    : default ../../UnityExplorer/lib/net35
+      BepInExMonoDir : default $(MonoRefRoot)/BepInEx/build647+
+      BepInEx 5 users: -p:BepInExMonoFlavor=BIE5 and point MonoRefRoot at a dir
+                       containing BepInEx.dll + UnityEngine.dll (BepInEx.Unity ref is skipped).
+  -->
   <PropertyGroup>
-    <TargetFramework>net6</TargetFramework>
+    <Configurations>Release_IL2CPP;Release_Mono</Configurations>
+    <Configuration Condition="'$(Configuration)'==''">Release_IL2CPP</Configuration>
     <OutputType>Library</OutputType>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
@@ -12,56 +36,135 @@
     <WarningLevel>8</WarningLevel>
     <RootNamespace>UnityExplorer.MCPBridge</RootNamespace>
     <Optimize>true</Optimize>
-    <DefineConstants>CPP;BIE;BIE6;INTEROP</DefineConstants>
   </PropertyGroup>
 
-  <ItemGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Release_IL2CPP'">
+    <TargetFramework>net6</TargetFramework>
+    <DefineConstants>CPP;BIE;BIE6;INTEROP</DefineConstants>
+    <AssemblyName>MCPBridge.IL2CPP</AssemblyName>
+    <OutputPath>..\..\dist\il2cpp\</OutputPath>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)'=='Release_Mono'">
+    <TargetFramework>net35</TargetFramework>
+    <BepInExMonoFlavor Condition="'$(BepInExMonoFlavor)'==''">BIPUNITY</BepInExMonoFlavor>
+    <DefineConstants>MONO;BIE;$(BepInExMonoFlavor)</DefineConstants>
+    <AssemblyName>MCPBridge.Mono</AssemblyName>
+    <OutputPath>..\..\dist\mono\</OutputPath>
+  </PropertyGroup>
+
+  <!-- IL2CPP reference locations (game install, never committed) -->
+  <PropertyGroup Condition="'$(Configuration)'=='Release_IL2CPP'">
+    <UnityGameDir Condition="'$(UnityGameDir)'==''">$(UNITY_GAME_DIR)</UnityGameDir>
+    <BepInExIl2CppCoreDir Condition="'$(BepInExIl2CppCoreDir)'==''">$(UnityGameDir)/BepInEx/core</BepInExIl2CppCoreDir>
+    <Il2CppInteropDir Condition="'$(Il2CppInteropDir)'==''">$(UnityGameDir)/BepInEx/interop</Il2CppInteropDir>
+    <McsIl2CppRef Condition="'$(McsIl2CppRef)'==''">$(MSBuildProjectDirectory)/../../UnityExplorer/lib/net6/mcs.dll</McsIl2CppRef>
+  </PropertyGroup>
+
+  <!-- Mono reference locations (BepInEx install or UnityExplorer/lib, never committed) -->
+  <PropertyGroup Condition="'$(Configuration)'=='Release_Mono'">
+    <MonoRefRoot Condition="'$(MonoRefRoot)'==''">$(MONO_REF_ROOT)</MonoRefRoot>
+    <MonoRefRoot Condition="'$(MonoRefRoot)'==''">$(MSBuildProjectDirectory)/../../UnityExplorer/lib/net35</MonoRefRoot>
+    <BepInExMonoDir Condition="'$(BepInExMonoDir)'==''">$(MonoRefRoot)/BepInEx/build647+</BepInExMonoDir>
+    <McsMonoRef Condition="'$(McsMonoRef)'==''">$(MonoRefRoot)/mcs.dll</McsMonoRef>
+  </PropertyGroup>
+
+  <Target Name="CheckIl2CppRefs" BeforeTargets="BeforeBuild" Condition="'$(Configuration)'=='Release_IL2CPP'">
+    <Error Condition="'$(UnityGameDir)'==''"
+           Text="UnityGameDir is not set. Pass -p:UnityGameDir='&lt;game root with BepInEx&gt;' or set the UNITY_GAME_DIR environment variable." />
+    <Error Condition="!Exists('$(BepInExIl2CppCoreDir)/BepInEx.Core.dll')"
+           Text="BepInEx.Core.dll not found in '$(BepInExIl2CppCoreDir)'. Set UnityGameDir/BepInExIl2CppCoreDir to your IL2CPP game's BepInEx install." />
+    <Error Condition="!Exists('$(Il2CppInteropDir)/Il2Cppmscorlib.dll')"
+           Text="Interop assemblies not found in '$(Il2CppInteropDir)'. Set Il2CppInteropDir to the game's BepInEx/interop folder." />
+  </Target>
+
+  <Target Name="CheckMonoRefs" BeforeTargets="BeforeBuild" Condition="'$(Configuration)'=='Release_Mono'">
+    <Error Condition="!Exists('$(BepInExMonoDir)/BepInEx.Core.dll') and !Exists('$(MonoRefRoot)/BepInEx.dll')"
+           Text="BepInEx Mono references not found. Set MONO_REF_ROOT (or MonoRefRoot/BepInExMonoDir) to a BepInEx 6 Unity Mono install or the UnityExplorer lib/net35 folder." />
+    <Error Condition="!Exists('$(MonoRefRoot)/UnityEngine.dll')"
+           Text="Managed UnityEngine.dll not found in '$(MonoRefRoot)'. Mono builds need the game's Managed/ folder or UnityExplorer lib/net35." />
+  </Target>
+
+  <ItemGroup Condition="'$(Configuration)'=='Release_IL2CPP'">
     <Reference Include="Il2Cppmscorlib">
-      <HintPath>D:\F95 Game\aidealrays\Aidealrays_Ver_2.1\BepInEx\interop\Il2Cppmscorlib.dll</HintPath>
+      <HintPath>$(Il2CppInteropDir)/Il2Cppmscorlib.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="UnityEngine">
-      <HintPath>D:\F95 Game\aidealrays\Aidealrays_Ver_2.1\BepInEx\interop\UnityEngine.dll</HintPath>
+      <HintPath>$(Il2CppInteropDir)/UnityEngine.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="UnityEngine.CoreModule">
-      <HintPath>D:\F95 Game\aidealrays\Aidealrays_Ver_2.1\BepInEx\interop\UnityEngine.CoreModule.dll</HintPath>
+      <HintPath>$(Il2CppInteropDir)/UnityEngine.CoreModule.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="UnityEngine.PhysicsModule">
-      <HintPath>D:\F95 Game\aidealrays\Aidealrays_Ver_2.1\BepInEx\interop\UnityEngine.PhysicsModule.dll</HintPath>
+      <HintPath>$(Il2CppInteropDir)/UnityEngine.PhysicsModule.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="UnityEngine.TextRenderingModule">
-      <HintPath>D:\F95 Game\aidealrays\Aidealrays_Ver_2.1\BepInEx\interop\UnityEngine.TextRenderingModule.dll</HintPath>
+      <HintPath>$(Il2CppInteropDir)/UnityEngine.TextRenderingModule.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="UnityEngine.UI">
-      <HintPath>D:\F95 Game\aidealrays\Aidealrays_Ver_2.1\BepInEx\interop\UnityEngine.UI.dll</HintPath>
+      <HintPath>$(Il2CppInteropDir)/UnityEngine.UI.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="UnityEngine.UIModule">
-      <HintPath>D:\F95 Game\aidealrays\Aidealrays_Ver_2.1\BepInEx\interop\UnityEngine.UIModule.dll</HintPath>
+      <HintPath>$(Il2CppInteropDir)/UnityEngine.UIModule.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="UnityEngine.IMGUIModule">
-      <HintPath>D:\F95 Game\aidealrays\Aidealrays_Ver_2.1\BepInEx\interop\UnityEngine.IMGUIModule.dll</HintPath>
+      <HintPath>$(Il2CppInteropDir)/UnityEngine.IMGUIModule.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="BepInEx.Core">
-      <HintPath>D:\F95 Game\aidealrays\Aidealrays_Ver_2.1\BepInEx\core\BepInEx.Core.dll</HintPath>
+      <HintPath>$(BepInExIl2CppCoreDir)/BepInEx.Core.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="BepInEx.Unity.IL2CPP">
-      <HintPath>D:\F95 Game\aidealrays\Aidealrays_Ver_2.1\BepInEx\core\BepInEx.Unity.IL2CPP.dll</HintPath>
+      <HintPath>$(BepInExIl2CppCoreDir)/BepInEx.Unity.IL2CPP.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="Il2CppInterop.Runtime">
-      <HintPath>D:\F95 Game\aidealrays\Aidealrays_Ver_2.1\BepInEx\core\Il2CppInterop.Runtime.dll</HintPath>
+      <HintPath>$(BepInExIl2CppCoreDir)/Il2CppInterop.Runtime.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="mcs">
-      <HintPath>..\..\UnityExplorer\lib\net6\mcs.dll</HintPath>
+      <HintPath>$(McsIl2CppRef)</HintPath>
+      <Private>True</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(Configuration)'=='Release_Mono' and '$(BepInExMonoFlavor)'=='BIPUNITY'">
+    <Reference Include="BepInEx">
+      <HintPath>$(BepInExMonoDir)/BepInEx.Core.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="BepInEx.Unity">
+      <HintPath>$(BepInExMonoDir)/BepInEx.Unity.Mono.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(Configuration)'=='Release_Mono' and '$(BepInExMonoFlavor)'!='BIPUNITY'">
+    <Reference Include="BepInEx">
+      <HintPath>$(MonoRefRoot)/BepInEx.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(Configuration)'=='Release_Mono'">
+    <Reference Include="UnityEngine">
+      <HintPath>$(MonoRefRoot)/UnityEngine.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UI">
+      <HintPath>$(MonoRefRoot)/UnityEngine.UI.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="mcs">
+      <HintPath>$(McsMonoRef)</HintPath>
       <Private>True</Private>
     </Reference>
   </ItemGroup>

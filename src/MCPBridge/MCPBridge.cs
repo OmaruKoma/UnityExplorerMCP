@@ -9,8 +9,10 @@ using System.Text;
 using System.Threading;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+#if CPP
 using Il2CppInterop.Runtime.Injection;
 using Il2CppInterop.Runtime;
+#endif
 using System.Runtime.InteropServices;
 using System.Text.Json;
 
@@ -323,7 +325,7 @@ namespace UnityExplorer.MCPBridge
                 {
                     Status = "ok",
                     UnityVersion = Application.unityVersion,
-                    BridgeVersion = "1.1.0",
+                    BridgeVersion = "1.2.0",
                     SessionId = SessionId
                 }
             };
@@ -498,7 +500,11 @@ namespace UnityExplorer.MCPBridge
                 if (comp is Behaviour) enabled = ((Behaviour)comp).enabled;
 components.Add(new ComponentInfo
                 {
+#if CPP
                     TypeName = GetIl2CppTypeName(comp),
+#else
+                    TypeName = comp.GetType().FullName,
+#endif
                     InstanceId = comp.GetInstanceID(),
                     Enabled = enabled
                 });
@@ -526,6 +532,7 @@ components.Add(new ComponentInfo
             
             try
             {
+#if CPP
                 if (obj is Component comp)
                 {
                     IntPtr klass = IL2CPP.il2cpp_object_get_class(comp.Pointer);
@@ -612,8 +619,12 @@ components.Add(new ComponentInfo
                         catch { }
                     }
                 }
+#endif
+#if CPP
                 else
+#endif
                 {
+                    // Mono backend (or non-Component on IL2CPP): managed reflection.
                     var type = obj.GetType();
                     info.TypeName = type.FullName;
                     BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static;
@@ -644,6 +655,7 @@ components.Add(new ComponentInfo
             return new MCPResponse { Success = true, Data = info };
         }
         
+#if CPP
         private string FormatFieldValue(IntPtr valuePtr, string typeName)
         {
             if (valuePtr == IntPtr.Zero) return "null";
@@ -678,6 +690,7 @@ components.Add(new ComponentInfo
             }
             catch { return "N/A"; }
         }
+#endif
         private MCPResponse HandleGetField(MCPRequest request)
         {
             int instanceId = ExtractInstanceId(request);
@@ -808,11 +821,13 @@ components.Add(new ComponentInfo
             
             UnityEngine.Object obj = null;
             if (instanceId != 0) obj = FindObjectById(instanceId);
-            
+
+#if CPP
             if (obj is Component comp)
             {
                 return InvokeIl2CppMethod(comp, methodName, args);
             }
+#endif
             
             Type type = null;
             if (obj != null) type = obj.GetType();
@@ -971,8 +986,13 @@ components.Add(new ComponentInfo
                 Type type = AssemblyInspector.ResolveType(asm, typeName);
                 if (type == null)
                 {
+#if CPP
                     // Fallback: pure-Il2Cpp static call via il2cpp_class_from_name.
                     return InvokeIl2CppStatic(typeName, methodName, request, encoding);
+#else
+                    // Mono backend: managed reflection sees every type; nothing more to try.
+                    return new MCPResponse { Success = false, Error = "Type not found: " + typeName };
+#endif
                 }
 
                 var rawArgs = new System.Collections.Generic.List<System.Text.Json.JsonElement>();
@@ -1090,7 +1110,11 @@ components.Add(new ComponentInfo
             }
             return null;
         }
-        
+
+#if CPP
+        // ---- IL2CPP-native helpers (il2cpp_* P/Invoke + raw Marshal封送).
+        // Mono backend does not compile this region; managed reflection
+        // (ResolveType / MethodInfo.Invoke) covers the same operations.
         private string GetIl2CppTypeName(Component comp)
         {
             try
@@ -1402,7 +1426,8 @@ components.Add(new ComponentInfo
             }
             catch { return Marshal.PtrToStringUni(strPtr); }
         }
-        
+#endif
+
         private UnityEngine.Object FindObjectById(int instanceId)
         {
             if (instanceId >= 1000000 && ObjectRegistry.TryGet(instanceId, out object reg) && reg is UnityEngine.Object uo)

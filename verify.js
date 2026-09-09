@@ -23,7 +23,8 @@ const checks = [
   { name: 'MCPBridgeMod.cs', path: 'src\\MCPBridge\\MCPBridgeMod.cs', required: true },
   { name: 'DTO.cs', path: 'src\\MCPBridge\\DTO.cs', required: true },
   { name: 'MCPBridge.csproj', path: 'src\\MCPBridge\\MCPBridge.csproj', required: true },
-  { name: 'MCPBridge.dll', path: 'src\\MCPBridge\\bin\\Release\\MCPBridge.dll', required: true },
+  { name: 'MCPBridge.IL2CPP.dll', path: 'dist\\il2cpp\\MCPBridge.IL2CPP.dll', required: true },
+  { name: 'MCPBridge.Mono.dll', path: 'dist\\mono\\MCPBridge.Mono.dll', required: true },
   
   // MCP Server files
   { name: 'server.ts', path: 'mcp-server\\src\\server.ts', required: true },

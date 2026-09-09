@@ -59,6 +59,7 @@ namespace UnityExplorer.MCPBridge
         public static void AttachOnce()
         {
             if (_attached) return;
+#if CPP
             try
             {
                 IntPtr domain = Il2CppInterop.Runtime.IL2CPP.il2cpp_domain_get();
@@ -67,6 +68,10 @@ namespace UnityExplorer.MCPBridge
                 _attached = true;
             }
             catch { _attached = true; }
+#else
+            // Mono backend: no il2cpp domain exists; managed threads need no attach.
+            _attached = true;
+#endif
         }
     }
 

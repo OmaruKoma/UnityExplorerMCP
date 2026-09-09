@@ -196,7 +196,7 @@ namespace UnityExplorer.MCPBridge
                 }
             }
             throw new Exception("No overload of " + type.FullName + "." + methodName +
-                " matches " + rawArgs.Count + " arg(s). Tried: " + string.Join(" | ", tried));
+                " matches " + rawArgs.Count + " arg(s). Tried: " + string.Join(" | ", tried.ToArray()));
         }
 
         private static bool TryConvert(ParameterInfo[] ps, List<JsonElement> rawArgs, bool compact, out object[] converted)
@@ -268,7 +268,7 @@ namespace UnityExplorer.MCPBridge
                 }
             }
             throw new Exception("No overload of " + type.FullName + "." + methodName +
-                " matches " + rawArgs.Count + " arg(s). Tried: " + string.Join(" | ", tried));
+                " matches " + rawArgs.Count + " arg(s). Tried: " + string.Join(" | ", tried.ToArray()));
         }
 
         /// <summary>Read back out/ref params after Invoke; values serialized per P3.</summary>
@@ -298,7 +298,7 @@ namespace UnityExplorer.MCPBridge
             var ps = new List<string>();
             foreach (var p in m.GetParameters())
                 ps.Add((p.ParameterType.IsByRef ? "out/ref " : "") + p.ParameterType.Name + " " + p.Name);
-            return m.ReturnType.Name + " " + m.Name + "(" + string.Join(", ", ps) + ")";
+            return m.ReturnType.Name + " " + m.Name + "(" + string.Join(", ", ps.ToArray()) + ")";
         }
 
         /// <summary>Re-resolve a Hierarchy path like "Root/Child" to a live GameObject.</summary>

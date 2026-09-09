@@ -1,33 +1,64 @@
-# Build script for UnityExplorer MCP Bridge
+# Build script for UnityExplorer MCP Bridge (dual backend).
+#
+#   .\build.ps1                       # IL2CPP + Mono + MCP Server
+#   .\build.ps1 -Backend IL2CPP       # IL2CPP backend only
+#   .\build.ps1 -Backend Mono         # Mono backend only
+#
+# Reference locations are resolved by src/MCPBridge/MCPBridge.csproj from
+# environment variables / MSBuild properties (no hardcoded paths):
+#   UNITY_GAME_DIR  : IL2CPP game root containing BepInEx/ (interop + core)
+#   MONO_REF_ROOT   : BepInEx Mono refs (install, game Managed/, or UnityExplorer lib/net35)
 
 param(
-    [string]$Configuration = "Release"
+    [ValidateSet("All", "IL2CPP", "Mono", "Server")]
+    [string]$Backend = "All"
 )
 
 $ErrorActionPreference = "Stop"
+$RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 
-# Build MCP Bridge
-Write-Host "Building MCP Bridge..." -ForegroundColor Green
-Set-Location "src\MCPBridge"
-dotnet build -c $Configuration
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "Failed to build MCP Bridge"
-    exit 1
+function Invoke-BridgeBuild {
+    param([string]$Config, [string]$Label)
+    Write-Host "Building MCP Bridge ($Label)..." -ForegroundColor Green
+    dotnet build "$RepoRoot\src\MCPBridge\MCPBridge.csproj" -c $Config
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Failed to build MCP Bridge ($Label)"
+        exit 1
+    }
 }
 
-# Build MCP Server
-Write-Host "Building MCP Server..." -ForegroundColor Green
-Set-Location "..\..\mcp-server"
-npm install
-npm run build
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "Failed to build MCP Server"
-    exit 1
+if ($Backend -eq "All" -or $Backend -eq "IL2CPP") {
+    Invoke-BridgeBuild -Config "Release_IL2CPP" -Label "IL2CPP"
 }
 
-Set-Location ".."
+if ($Backend -eq "All" -or $Backend -eq "Mono") {
+    Invoke-BridgeBuild -Config "Release_Mono" -Label "Mono"
+}
+
+if ($Backend -eq "All" -or $Backend -eq "Server") {
+    Write-Host "Building MCP Server..." -ForegroundColor Green
+    Push-Location "$RepoRoot\mcp-server"
+    try {
+        npm install
+        npm run build
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "Failed to build MCP Server"
+            exit 1
+        }
+    } finally {
+        Pop-Location
+    }
+}
+
 Write-Host "Build complete!" -ForegroundColor Green
 Write-Host ""
 Write-Host "Output files:" -ForegroundColor Yellow
-Write-Host "  MCP Bridge: src\MCPBridge\bin\$Configuration\UnityExplorer.MCPBridge.dll"
-Write-Host "  MCP Server: mcp-server\dist\server.js"
+if ($Backend -eq "All" -or $Backend -eq "IL2CPP") {
+    Write-Host "  IL2CPP Bridge: dist\il2cpp\MCPBridge.IL2CPP.dll (+ mcs.dll)"
+}
+if ($Backend -eq "All" -or $Backend -eq "Mono") {
+    Write-Host "  Mono Bridge:   dist\mono\MCPBridge.Mono.dll (+ mcs.dll)"
+}
+if ($Backend -eq "All" -or $Backend -eq "Server") {
+    Write-Host "  MCP Server:    mcp-server\dist\server.js"
+}
