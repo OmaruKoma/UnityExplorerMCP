@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UnityExplorerMCP — runtime MCP bridge for Unity games</title>
+<meta name="description" content="Runtime Model Context Protocol bridge for Unity games. Inspect objects, read and write fields, call methods, execute C# and tail BepInEx logs — over IL2CPP and Mono.">
+<meta property="og:title" content="UnityExplorerMCP">
+<meta property="og:description" content="Runtime MCP bridge for Unity games — inspect, poke and script a running game from your AI agent.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9A%99%EF%B8%8F%3C/text%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #0b0d12;
+    --panel: #12151d;
+    --panel-2: #171b25;
+    --line: #232936;
+    --text: #e6e9f0;
+    --muted: #9aa3b5;
+    --accent: #7c8cff;
+    --accent-2: #38d9a9;
+    --code: #0e1118;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background:
+      radial-gradient(1200px 600px at 15% -10%, rgba(124,140,255,.18), transparent 60%),
+      radial-gradient(900px 500px at 90% 0%, rgba(56,217,169,.12), transparent 55%),
+      var(--bg);
+    color: var(--text);
+    font: 16px/1.65 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 0 24px; }
+
+  header.nav {
+    position: sticky; top: 0; z-index: 10;
+    backdrop-filter: blur(12px);
+    background: rgba(11,13,18,.72);
+    border-bottom: 1px solid var(--line);
+  }
+  .nav .wrap { display: flex; align-items: center; gap: 18px; height: 60px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: .2px; color: var(--text); }
+  .brand .dot { width: 10px; height: 10px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: 0 0 18px rgba(124,140,255,.8); }
+  .nav nav { margin-left: auto; display: flex; gap: 20px; font-size: 14px; }
+  .nav nav a { color: var(--muted); }
+  .nav nav a:hover { color: var(--text); text-decoration: none; }
+
+  .hero { padding: 84px 0 56px; }
+  .eyebrow { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--accent-2); border: 1px solid rgba(56,217,169,.28); background: rgba(56,217,169,.07); padding: 5px 11px; border-radius: 999px; }
+  h1 { font-size: clamp(36px, 6vw, 60px); line-height: 1.05; letter-spacing: -.02em; margin: 20px 0 16px; }
+  h1 .grad { background: linear-gradient(100deg, #aab6ff, #38d9a9 70%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .lede { font-size: clamp(17px, 2.2vw, 20px); color: var(--muted); max-width: 760px; margin: 0 0 30px; }
+  .cta { display: flex; flex-wrap: wrap; gap: 12px; }
+  .btn { display: inline-flex; align-items: center; gap: 8px; padding: 11px 18px; border-radius: 10px; font-weight: 600; font-size: 15px; border: 1px solid var(--line); color: var(--text); background: var(--panel-2); }
+  .btn:hover { text-decoration: none; border-color: #3a4356; transform: translateY(-1px); }
+  .btn.primary { background: linear-gradient(120deg, #5b6cff, #38d9a9); color: #07120f; border: 0; }
+  .btn.primary:hover { filter: brightness(1.05); }
+  .badges { margin-top: 26px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .badges img { height: 20px; }
+
+  section { padding: 46px 0; border-top: 1px solid var(--line); }
+  h2 { font-size: 26px; letter-spacing: -.01em; margin: 0 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 26px; max-width: 720px; }
+
+  .grid { display: grid; gap: 14px; }
+  .g3 { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+  .card { background: linear-gradient(180deg, var(--panel-2), var(--panel)); border: 1px solid var(--line); border-radius: 14px; padding: 18px 18px 16px; }
+  .card h3 { margin: 0 0 6px; font-size: 15px; }
+  .card p { margin: 0; color: var(--muted); font-size: 14px; }
+  .card .num { font-family: ui-monospace, monospace; font-size: 12px; color: var(--accent-2); }
+
+  pre { background: var(--code); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; overflow: auto; font-size: 13.5px; line-height: 1.6; }
+  pre .c { color: #6b7688; }
+  pre .k { color: #aab6ff; }
+  pre .s { color: #7ce3c1; }
+
+  .steps { counter-reset: step; display: grid; gap: 14px; }
+  .step { position: relative; padding: 18px 18px 18px 58px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; }
+  .step::before { counter-increment: step; content: counter(step); position: absolute; left: 18px; top: 18px; width: 26px; height: 26px; display: grid; place-items: center; border-radius: 8px; background: rgba(124,140,255,.16); color: var(--accent); font-weight: 700; font-size: 13px; }
+  .step h3 { margin: 0 0 6px; font-size: 15px; }
+  .step p { margin: 0 0 10px; color: var(--muted); font-size: 14px; }
+  .step pre { margin: 0; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; }
+  td code { color: #c7d0ff; }
+  .ok { color: var(--accent-2); }
+  .partial { color: #e3c27c; }
+
+  footer { padding: 40px 0 60px; color: var(--muted); font-size: 14px; border-top: 1px solid var(--line); }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; }
+
+  @media (max-width: 640px) {
+    .nav nav { display: none; }
+    .hero { padding-top: 56px; }
+  }
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="#top"><span class="dot"></span> UnityExplorerMCP</a>
+    <nav>
+      <a href="#features">Features</a>
+      <a href="#install">Install</a>
+      <a href="#tools">Tools</a>
+      <a href="https://github.com/OmaruKoma/UnityExplorerMCP#readme">Docs</a>
+      <a href="https://github.com/OmaruKoma/UnityExplorerMCP/releases">Releases</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+  <div class="wrap hero">
+    <span class="eyebrow">Runtime MCP · not Editor MCP</span>
+    <h1>Give your agent a grip on a <span class="grad">running Unity game</span>.</h1>
+    <p class="lede">
+      UnityExplorerMCP puts a Model Context Protocol server in front of the live game process.
+      Walk the scene, explore the type system, read and write fields, call methods, execute C#
+      in-process and tail the BepInEx log — over IL2CPP and Mono, from any MCP client.
+    </p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/OmaruKoma/UnityExplorerMCP/releases">Download</a>
+      <a class="btn" href="#install">Install guide</a>
+      <a class="btn" href="https://github.com/OmaruKoma/UnityExplorerMCP">Source on GitHub</a>
+    </div>
+    <div class="badges">
+      <a href="https://github.com/OmaruKoma/UnityExplorerMCP/releases"><img alt="Release" src="https://img.shields.io/github/v/release/OmaruKoma/UnityExplorerMCP?color=2ea043&label=release"></a>
+      <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-3da639.svg">
+      <img alt="Node 18+" src="https://img.shields.io/badge/node-%E2%89%A518-339933?logo=nodedotjs&logoColor=white">
+      <img alt="IL2CPP or Mono" src="https://img.shields.io/badge/runtime-IL2CPP%20%7C%20Mono-8250df">
+    </div>
+  </div>
+
+  <section id="demo">
+    <div class="wrap">
+      <h2>What it looks like</h2>
+      <p class="sub">One prompt, a chain of tool calls, a live answer — no Editor, no rebuild, no restart loop.</p>
+<pre><span class="c">&gt; "The shop button does nothing. Find the shop controller, work out what it
+  expects, and call it the way the UI would."</span>
+
+unity_capabilities          {}                                  <span class="c">→ backend, session, limits</span>
+unity_find_objects_of_type  { <span class="s">"type"</span>: <span class="s">"Game.ShopController"</span> }    <span class="c">→ handles</span>
+unity_inspect               { <span class="s">"handle"</span>: <span class="s">"ShopController#7:-33814"</span> }
+unity_search_members        { <span class="s">"name_contains"</span>: <span class="s">"Open"</span> }
+unity_get_field             { <span class="s">"handle"</span>: <span class="s">"ShopController#7:-33814"</span>, <span class="s">"field"</span>: <span class="s">"_isReady"</span> }
+unity_invoke_method         { <span class="s">"handle"</span>: <span class="s">"ShopController#7:-33814"</span>, <span class="s">"method"</span>: <span class="s">"Open"</span> }
+unity_tail_log              { <span class="s">"lines"</span>: 50 }                      <span class="c">→ what happened next</span></pre>
+    </div>
+  </section>
+
+  <section id="features">
+    <div class="wrap">
+      <h2>Features</h2>
+      <p class="sub">Built for agents: bounded outputs, explicit limits, honest capability reporting.</p>
+      <div class="grid g3">
+        <div class="card"><span class="num">01</span><h3>Live runtime inspection</h3><p>GameObjects, components, fields, properties and methods of the actual running process.</p></div>
+        <div class="card"><span class="num">02</span><h3>Reflection, everywhere</h3><p>Type discovery and member search across every loaded assembly, plus live instance lookup.</p></div>
+        <div class="card"><span class="num">03</span><h3>Read, write, call</h3><p>Instance and static fields/properties, method invocation including <code>out</code>/<code>ref</code>.</p></div>
+        <div class="card"><span class="num">04</span><h3>C# in the game</h3><p>Self-hosted Mono.CSharp engine — no UI dependency, same flavour as UnityExplorer's console.</p></div>
+        <div class="card"><span class="num">05</span><h3>Session-aware handles</h3><p><code>session:id</code> handles; stale ones fail fast with <code>STALE_HANDLE</code> instead of hitting a wrong object.</p></div>
+        <div class="card"><span class="num">06</span><h3>Agent-sized output</h3><p>Pagination, truncation with sha256, bounded member lists and structured errors.</p></div>
+        <div class="card"><span class="num">07</span><h3>Harmony inventory</h3><p>Read-only list of patched methods and their patch owners.</p></div>
+        <div class="card"><span class="num">08</span><h3>Log tailing</h3><p>Read <code>BepInEx/LogOutput.log</code> without locking the game — works while the game is closed.</p></div>
+        <div class="card"><span class="num">09</span><h3>IL2CPP + Mono</h3><p>One tool surface across BepInEx 5 and 6, IL2CPP and Mono backends.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="install">
+    <div class="wrap">
+      <h2>Install</h2>
+      <p class="sub">You need a Unity game with BepInEx, Node.js 18+ for the server, and .NET SDK only if you build the bridge yourself.</p>
+      <div class="steps">
+        <div class="step">
+          <h3>Drop the bridge into the game</h3>
+          <p>Download the zip matching your loader and extract it into <code>&lt;GAME_ROOT&gt;/BepInEx/plugins/</code>. The DLL and <code>mcs.dll</code> must stay side by side.</p>
+<pre>UnityExplorerMCP-&lt;version&gt;-IL2CPP.zip          <span class="c"># BepInEx 6 + IL2CPP</span>
+UnityExplorerMCP-&lt;version&gt;-Mono-BepInEx6.zip   <span class="c"># BepInEx 6 + Mono</span>
+UnityExplorerMCP-&lt;version&gt;-Mono-BepInEx5.zip   <span class="c"># BepInEx 5 + Mono</span></pre>
+        </div>
+        <div class="step">
+          <h3>Start the server</h3>
+<pre>unzip unity-explorer-mcp-server-&lt;version&gt;.zip
+cd unity-explorer-mcp-server-&lt;version&gt;
+npm ci --omit=dev
+node dist/server.js        <span class="c"># speaks MCP on stdio</span></pre>
+        </div>
+        <div class="step">
+          <h3>Point your client at it</h3>
+<pre>{
+  <span class="s">"mcpServers"</span>: {
+    <span class="s">"unity"</span>: {
+      <span class="s">"command"</span>: <span class="s">"node"</span>,
+      <span class="s">"args"</span>: [<span class="s">"&lt;REPO_PATH&gt;/mcp-server/dist/server.js"</span>],
+      <span class="s">"env"</span>: { <span class="s">"UNITY_BRIDGE_URL"</span>: <span class="s">"http://127.0.0.1:12345"</span> }
+    }
+  }
+}</pre>
+        </div>
+        <div class="step">
+          <h3>Verify the chain</h3>
+          <p>Ask your agent to call <code>unity_capabilities</code>. If it answers, the bridge, server and client are all live.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tools">
+    <div class="wrap">
+      <h2>24 tools</h2>
+      <p class="sub">Start with <code>unity_capabilities</code> — it reports the backend, session, tools and limits of the game you attached to.</p>
+      <table>
+        <thead><tr><th>Group</th><th>Tools</th></tr></thead>
+        <tbody>
+          <tr><td>Discovery</td><td><code>unity_capabilities</code> · <code>unity_ping</code> · <code>unity_scene_info</code> · <code>unity_list_assemblies</code></td></tr>
+          <tr><td>Scene &amp; objects</td><td><code>unity_hierarchy</code> · <code>unity_find_gameobjects</code> · <code>unity_get_gameobject</code> · <code>unity_get_components</code> · <code>unity_resolve_path</code></td></tr>
+          <tr><td>Types &amp; reflection</td><td><code>unity_inspect</code> · <code>unity_inspect_type</code> · <code>unity_search_members</code> · <code>unity_find_objects_of_type</code></td></tr>
+          <tr><td>Values &amp; calls</td><td><code>unity_get_field</code> · <code>unity_set_field</code> · <code>unity_get_property</code> · <code>unity_set_property</code> · <code>unity_get_static</code> · <code>unity_set_static</code> · <code>unity_invoke_method</code> · <code>unity_invoke_static</code></td></tr>
+          <tr><td>Runtime</td><td><code>unity_execute_csharp</code> · <code>unity_list_hooks</code> · <code>unity_tail_log</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="compat">
+    <div class="wrap">
+      <h2>Compatibility</h2>
+      <p class="sub">Verified on real runtimes, reported honestly at runtime.</p>
+      <table>
+        <thead><tr><th>Backend</th><th>Status</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td>IL2CPP · BepInEx 6</td><td class="ok">live-tested</td><td>Unity 2022.3, all 24 tools</td></tr>
+          <tr><td>Mono · BepInEx 5</td><td class="ok">live-tested</td><td>Unity 2019.4, BepInEx 5.4</td></tr>
+          <tr><td>Mono · BepInEx 6</td><td class="partial">build only</td><td>Same sources, no live runtime yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="safety">
+    <div class="wrap">
+      <h2>Safety</h2>
+      <p class="sub">
+        The bridge listens on <code>127.0.0.1</code> only and executes arbitrary C# sent by the agent.
+        Treat it like an attached debugger: run it against games you own, on your own machine.
+        <code>set_*</code> and <code>invoke_*</code> mutate live runtime state — inspect first.
+      </p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>MIT licensed · built for Unity modding and runtime debugging</span>
+    <span>
+      <a href="https://github.com/OmaruKoma/UnityExplorerMCP">GitHub</a> ·
+      <a href="https://github.com/OmaruKoma/UnityExplorerMCP/blob/master/README.md">README</a> ·
+      <a href="https://github.com/OmaruKoma/UnityExplorerMCP/blob/master/README.zh-CN.md">中文</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -5,14 +5,18 @@
 
 ## Requirements
 
-- A Unity game with **BepInEx** installed (IL2CPP or Mono) and **UnityExplorer** loaded
+- A Unity game with **BepInEx 5 or 6** installed (IL2CPP or Mono)
 - **Node.js 18+** (MCP Server)
 - **.NET SDK** (building the C# bridge)
+
+UnityExplorer itself is not required at runtime; the bridge ships its own Mono.CSharp (`mcs.dll`).
+Prebuilt DLLs are attached to [Releases](https://github.com/OmaruKoma/UnityExplorerMCP/releases)
+if you would rather skip the build.
 
 ## Step 1: Build
 
 ```powershell
-git clone <repository-url>
+git clone https://github.com/OmaruKoma/UnityExplorerMCP.git
 cd UnityExplorerMCP
 .\build.ps1
 ```
@@ -85,7 +89,7 @@ Environment variables (all optional except where noted):
 
 ## Step 4: Run
 
-1. Start the Unity game (UnityExplorer + MCP Bridge loaded)
+1. Start the Unity game (BepInEx + MCP Bridge loaded)
 2. Start your MCP client (it launches `mcp-server/dist/server.js` via stdio)
 3. In the agent, start with `unity_capabilities`, then explore
 

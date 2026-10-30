@@ -1,9 +1,16 @@
 {
   "name": "unity-explorer-mcp-server",
   "version": "1.0.0",
-  "description": "MCP Server for UnityExplorer integration",
+  "description": "MCP server bridging AI agents to a running Unity game via UnityExplorerMCP",
   "main": "dist/server.js",
   "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/OmaruKoma/UnityExplorerMCP.git",
+    "directory": "mcp-server"
+  },
+  "homepage": "https://github.com/OmaruKoma/UnityExplorerMCP#readme",
   "scripts": {
     "build": "tsc",
     "start": "node dist/server.js",
