@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UnityExplorerMCP — Unity 游戏 Runtime MCP 桥</title>
+<meta name="description" content="面向 Unity 游戏的 Runtime Model Context Protocol 桥。通过 IL2CPP 和 Mono 检视运行时对象、读写字段、调用方法、执行 C# 并查看 BepInEx 日志。">
+<meta property="og:title" content="UnityExplorerMCP">
+<meta property="og:description" content="从 AI Agent 检视和操作运行中的 Unity 游戏。">
+<meta property="og:type" content="website">
+<style>
+  :root { --bg:#0b0d12; --panel:#12151d; --panel-2:#171b25; --line:#232936; --text:#e6e9f0; --muted:#9aa3b5; --accent:#7c8cff; --green:#38d9a9; --code:#0e1118; }
+  * { box-sizing:border-box; }
+  html { scroll-behavior:smooth; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.75 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif; }
+  a { color:var(--accent); text-decoration:none; } a:hover { text-decoration:underline; }
+  code,pre { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
+  .wrap { max-width:1060px; margin:0 auto; padding:0 24px; }
+  header { position:sticky; top:0; z-index:2; background:rgba(11,13,18,.94); border-bottom:1px solid var(--line); }
+  .nav { display:flex; align-items:center; gap:18px; min-height:60px; }
+  .brand { color:var(--text); font-weight:700; } nav { margin-left:auto; display:flex; gap:18px; font-size:14px; } nav a { color:var(--muted); }
+  .hero { padding:76px 0 54px; }
+  .eyebrow { color:var(--green); font-size:14px; }
+  h1 { max-width:900px; margin:16px 0; font-size:clamp(36px,6vw,58px); line-height:1.2; }
+  h1 span { color:var(--green); }
+  .lede { max-width:760px; color:var(--muted); font-size:19px; }
+  .actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:24px; }
+  .button { display:inline-block; padding:10px 16px; border:1px solid var(--line); border-radius:6px; color:var(--text); background:var(--panel-2); }
+  .button.primary { background:var(--green); border-color:var(--green); color:#07120f; font-weight:700; }
+  section { padding:40px 0; border-top:1px solid var(--line); }
+  h2 { margin:0 0 6px; font-size:26px; } h3 { margin:0 0 6px; font-size:17px; }
+  .sub { max-width:760px; margin:0 0 22px; color:var(--muted); }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:12px; }
+  .item { padding:16px; border:1px solid var(--line); background:var(--panel); border-radius:6px; }
+  .item p { margin:0; color:var(--muted); font-size:14px; }
+  pre { overflow:auto; padding:16px; border:1px solid var(--line); border-radius:6px; background:var(--code); font-size:13px; line-height:1.65; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th,td { padding:10px 12px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+  th { color:var(--muted); font-weight:600; }
+  .ok { color:var(--green); } .partial { color:#e3c27c; }
+  footer { padding:30px 0 48px; color:var(--muted); font-size:14px; }
+  @media(max-width:680px) { nav { gap:12px; font-size:13px; } nav a:nth-child(2),nav a:nth-child(3) { display:none; } .hero { padding-top:52px; } }
+</style>
+</head>
+<body>
+<header><div class="wrap nav">
+  <a class="brand" href="#top">UnityExplorerMCP</a>
+  <nav><a href="#features">功能</a><a href="#install">安装</a><a href="#tools">工具</a><a href="https://github.com/OmaruKoma/UnityExplorerMCP/releases">发布</a><a href="../index.html">English</a></nav>
+</div></header>
+<main id="top">
+  <div class="wrap hero">
+    <div class="eyebrow">Runtime MCP · 不是 Editor MCP</div>
+    <h1>让 AI Agent 直接检视<span>运行中的 Unity 游戏</span></h1>
+    <p class="lede">UnityExplorerMCP 将 Model Context Protocol 服务连接到游戏进程。遍历场景、探索类型、读取和写入字段、调用方法、在进程内执行 C#、查看 BepInEx 日志。支持 IL2CPP 与 Mono，可从任意 MCP 客户端使用。</p>
+    <div class="actions"><a class="button primary" href="https://github.com/OmaruKoma/UnityExplorerMCP/releases">下载 Release</a><a class="button" href="#install">查看安装指南</a><a class="button" href="https://github.com/OmaruKoma/UnityExplorerMCP">GitHub 源码</a><a class="button" href="https://github.com/OmaruKoma/UnityExplorerMCP/blob/master/README.zh-CN.md">完整中文文档</a></div>
+  </div>
+  <section id="demo"><div class="wrap">
+    <h2>使用示例</h2><p class="sub">Agent 发起一组工具调用，直接检查游戏运行时状态；无需打开 Editor、重新构建或反复重启。</p>
+<pre>&gt; “商店按钮点了没反应。找到商店控制器，看它需要什么，然后按 UI 的方式调用它。”
+
+unity_capabilities          {}                                  → 后端、会话、限额
+unity_find_objects_of_type  { "type": "Game.ShopController" }    → 句柄
+unity_inspect               { "handle": "ShopController#7:-33814" }
+unity_search_members       { "name_contains": "Open" }
+unity_get_field             { "handle": "ShopController#7:-33814", "field": "_isReady" }
+unity_invoke_method         { "handle": "ShopController#7:-33814", "method": "Open" }
+unity_tail_log              { "lines": 50 }                      → 查看后续日志</pre>
+  </div></section>
+  <section id="features"><div class="wrap">
+    <h2>功能</h2><p class="sub">面向 Agent 的运行时接口，提供有边界的输出、明确的限额和真实的能力报告。</p>
+    <div class="grid">
+      <div class="item"><h3>运行时检视</h3><p>读取实际运行进程中的 GameObject、组件、字段、属性与方法。</p></div>
+      <div class="item"><h3>反射与类型搜索</h3><p>跨已加载程序集发现类型、搜索成员并查找活实例。</p></div>
+      <div class="item"><h3>读取、写入与调用</h3><p>访问实例和静态字段、属性；调用包括 <code>out</code>/<code>ref</code> 参数的方法。</p></div>
+      <div class="item"><h3>游戏内执行 C#</h3><p>内置 Mono.CSharp 执行引擎，不依赖额外 UI。</p></div>
+      <div class="item"><h3>Session 感知句柄</h3><p>句柄绑定会话；过期时以 <code>STALE_HANDLE</code> 快速失败，避免操作错误对象。</p></div>
+      <div class="item"><h3>适合 Agent 的输出</h3><p>支持分页、带 SHA-256 的截断、成员数量限制和结构化错误。</p></div>
+      <div class="item"><h3>Harmony Hook 清单</h3><p>只读列出已 patch 的方法及其 patch 所有者。</p></div>
+      <div class="item"><h3>日志查看</h3><p>读取 <code>BepInEx/LogOutput.log</code>，不锁定游戏文件；游戏关闭时也可查看。</p></div>
+    </div>
+  </div></section>
+  <section id="install"><div class="wrap">
+    <h2>安装</h2><p class="sub">需要安装 BepInEx 的 Unity 游戏；Server 需要 Node.js 18+。只有自行编译桥接 DLL 时才需要 .NET SDK。</p>
+    <div class="grid">
+      <div class="item"><h3>1. 安装游戏内桥接插件</h3><p>从 <a href="https://github.com/OmaruKoma/UnityExplorerMCP/releases">Releases</a> 下载与加载器匹配的压缩包，解压到 <code>&lt;GAME_ROOT&gt;/BepInEx/plugins/</code>。桥接 DLL 和 <code>mcs.dll</code> 必须放在同一目录。</p></div>
+      <div class="item"><h3>2. 启动 MCP Server</h3><p>下载 Server 源码或克隆仓库，在 <code>mcp-server</code> 目录安装依赖并运行：</p><pre>npm ci
+npm run build
+node dist/server.js</pre></div>
+      <div class="item"><h3>3. 配置 MCP 客户端</h3><p>将客户端配置中的命令指向 Server 的 <code>dist/server.js</code>，并设置桥接地址：</p><pre>"UNITY_BRIDGE_URL":
+  "http://127.0.0.1:12345"</pre></div>
+      <div class="item"><h3>4. 验证连接</h3><p>让 Agent 调用 <code>unity_capabilities</code>。收到后端、会话和工具信息，就说明桥接、Server 与客户端已连通。</p></div>
+    </div>
+    <p class="sub">支持的桥接包：IL2CPP / BepInEx 6、Mono / BepInEx 6、Mono / BepInEx 5。详细步骤和 Claude Desktop、Cursor、OpenCode 配置示例见<a href="https://github.com/OmaruKoma/UnityExplorerMCP/blob/master/README.zh-CN.md">中文 README</a>。</p>
+  </div></section>
+  <section id="tools"><div class="wrap">
+    <h2>24 个 MCP 工具</h2><p class="sub">每次会话先调用 <code>unity_capabilities</code>，获取当前游戏后端、会话、可用工具和限额。</p>
+    <table><thead><tr><th>类别</th><th>工具</th></tr></thead><tbody>
+      <tr><td>发现</td><td><code>unity_capabilities</code> · <code>unity_ping</code> · <code>unity_scene_info</code> · <code>unity_list_assemblies</code></td></tr>
+      <tr><td>场景与对象</td><td><code>unity_hierarchy</code> · <code>unity_find_gameobjects</code> · <code>unity_get_gameobject</code> · <code>unity_get_components</code> · <code>unity_resolve_path</code></td></tr>
+      <tr><td>类型与反射</td><td><code>unity_inspect</code> · <code>unity_inspect_type</code> · <code>unity_search_members</code> · <code>unity_find_objects_of_type</code></td></tr>
+      <tr><td>取值与调用</td><td><code>unity_get_field</code> · <code>unity_set_field</code> · <code>unity_get_property</code> · <code>unity_set_property</code> · <code>unity_get_static</code> · <code>unity_set_static</code> · <code>unity_invoke_method</code> · <code>unity_invoke_static</code></td></tr>
+      <tr><td>运行时</td><td><code>unity_execute_csharp</code> · <code>unity_list_hooks</code> · <code>unity_tail_log</code></td></tr>
+    </tbody></table>
+  </div></section>
+  <section id="compat"><div class="wrap">
+    <h2>兼容性</h2><p class="sub">真实运行验证状态会如实报告；BepInEx 6 Mono 尚未进行游戏内实测。</p>
+    <table><thead><tr><th>后端</th><th>状态</th><th>说明</th></tr></thead><tbody>
+      <tr><td>IL2CPP · BepInEx 6</td><td class="ok">已实测</td><td>Unity 2022.3，24 个工具</td></tr>
+      <tr><td>Mono · BepInEx 5</td><td class="ok">已实测</td><td>Unity 2019.4，BepInEx 5.4</td></tr>
+      <tr><td>Mono · BepInEx 6</td><td class="partial">仅编译验证</td><td>源码一致，尚无游戏内运行测试</td></tr>
+    </tbody></table>
+  </div></section>
+  <section id="safety"><div class="wrap">
+    <h2>安全说明</h2><p class="sub">桥接服务仅监听本机 <code>127.0.0.1</code>，并会执行 Agent 发送的任意 C#。请将其视为已连接的调试器，仅在自己的机器和游戏上使用。<code>set_*</code> 与 <code>invoke_*</code> 会修改运行时状态，操作前先检查目标。</p>
+  </div></section>
+</main>
+<footer><div class="wrap">MIT License · 为 Unity Mod 调试与运行时检视而构建　·　<a href="https://github.com/OmaruKoma/UnityExplorerMCP">GitHub</a>　·　<a href="https://github.com/OmaruKoma/UnityExplorerMCP/blob/master/README.zh-CN.md">中文文档</a>　·　<a href="../index.html">English</a></div></footer>
+</body>
+</html>

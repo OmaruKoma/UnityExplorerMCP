@@ -2,6 +2,8 @@
 
 **Runtime MCP bridge for Unity games.** Give an AI agent a debugger-grade grip on a *running* Unity game: walk the scene, explore the type system, read and write fields and properties, call methods, execute C# in-process and tail the BepInEx log — through the Model Context Protocol.
 
+UnityExplorerMCP connects MCP-compatible AI clients to live Unity game processes through a BepInEx plugin. It supports both IL2CPP and Mono, and is designed for runtime inspection, mod debugging, and live experimentation without requiring the Unity Editor or game project files.
+
 [![Release](https://img.shields.io/github/v/release/OmaruKoma/UnityExplorerMCP?color=2ea043&label=release)](https://github.com/OmaruKoma/UnityExplorerMCP/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-3da639.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A518-339933?logo=nodedotjs&logoColor=white)](#requirements)
@@ -177,7 +179,7 @@ Any stdio MCP client works. Replace `<REPO_PATH>` with your server location and
       "args": ["<REPO_PATH>/mcp-server/dist/server.js"],
       "env": {
         "UNITY_BRIDGE_URL": "http://127.0.0.1:12345",
-        "REQUEST_TIMEOUT": "30000",
+        "UNITY_BRIDGE_TIMEOUT": "120000",
         "UNITY_GAME_ROOT": "<GAME_ROOT_WITH_BEPINEX>"
       }
     }
@@ -198,7 +200,7 @@ Any stdio MCP client works. Replace `<REPO_PATH>` with your server location and
       "enabled": true,
       "environment": {
         "UNITY_BRIDGE_URL": "http://127.0.0.1:12345",
-        "REQUEST_TIMEOUT": "30000"
+        "UNITY_BRIDGE_TIMEOUT": "120000"
       }
     }
   }
@@ -279,7 +281,8 @@ patch state. The finished mod does not depend on this project.
 | Variable | Default | Scope |
 |---|---|---|
 | `UNITY_BRIDGE_URL` | `http://127.0.0.1:12345` | Server → bridge address |
-| `REQUEST_TIMEOUT` | `30000` | Server request timeout (ms) |
+| `UNITY_BRIDGE_TIMEOUT` | `120000` | Server → bridge request timeout (ms); raise for long `execute_csharp`/IL2CPP scans |
+| `UNITY_MCP_MAX_BYTES` | `1500000` | Max tool-result text bytes before truncation; lower it if a client chokes on large scenes |
 | `UNITY_GAME_ROOT` | — | Game root for `unity_tail_log` auto-detection |
 | `MCP_BRIDGE_PORT` | `12345` | Bridge listen port (read in-game; keep in sync with `UNITY_BRIDGE_URL`) |
 | `MCP_ARRAY_LIMIT` | `500` | Max inlined array items (bridge) |
@@ -308,7 +311,7 @@ stdio MCP can use the bridge through the bundled Node server; direct HTTP is for
   builds (check the plugin count in `LogOutput.log`). `mcs.dll` must sit next to the bridge DLL,
   or `unity_execute_csharp` fails.
 - **Timeouts during loads** — scene loads block Unity's main thread. Wait until the game is idle
-  and retry; a short `REQUEST_TIMEOUT` will misreport during loading.
+  and retry; a short `UNITY_BRIDGE_TIMEOUT` will misreport during loading.
 - **`STALE_HANDLE`** — the session changed (scene load, restart). Re-resolve the handle.
 - **`execute_csharp` CS0584** — prefer `foreach` over LINQ on `Type[]`; mcs trips on stripped
   interop stubs (the same quirk affects UnityExplorer's own console).

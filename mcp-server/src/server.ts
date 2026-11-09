@@ -12,30 +12,52 @@ import { tailLog } from "./logTail.js";
 
 // Configuration
 const UNITY_BRIDGE_URL = process.env.UNITY_BRIDGE_URL || "http://127.0.0.1:12345";
-const REQUEST_TIMEOUT = parseInt(process.env.REQUEST_TIMEOUT || "30000");
+// Compiling C# in-process can take tens of seconds; IL2CPP FindObjectsOfType is slower still.
+const REQUEST_TIMEOUT = parsePositiveInt(
+  process.env.UNITY_BRIDGE_TIMEOUT || process.env.REQUEST_TIMEOUT,
+  120000
+);
+// Connectivity probes must fail fast: a frozen Unity main thread (runInBackground=false)
+// otherwise stalls MCP server startup for the full request timeout.
+const PING_TIMEOUT = Math.min(REQUEST_TIMEOUT, 5000);
+// Cap on tool result text. The host drops/aborts on multi-megabyte tool results
+// (observed: a single find_gameobjects reply of 3.2M chars killed the transport and
+// every later call failed), so oversized payloads are cut and paged instead.
+const MAX_TEXT_BYTES = parsePositiveInt(process.env.UNITY_MCP_MAX_BYTES, 1500000);
+
+function parsePositiveInt(raw: string | undefined, fallback: number): number {
+  const value = Number.parseInt(raw ?? "", 10);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
 
 // Unity Bridge Client
 class UnityBridgeClient {
   private client: AxiosInstance;
+  private baseUrl: string;
   private connected: boolean = false;
 
   constructor(baseUrl: string, timeout: number) {
+    this.baseUrl = baseUrl;
     this.client = axios.create({
       baseURL: baseUrl,
       timeout: timeout,
       headers: {
         "Content-Type": "application/json",
       },
+      // Keep raw body so an oversized response is not silently re-parsed.
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity,
     });
   }
 
   async ping(): Promise<boolean> {
     try {
-      const response = await this.client.post("/", {
-        method: "ping",
-        params: {},
-      });
-      this.connected = response.data.Success ?? response.data.success;
+      const response = await this.client.post(
+        "/",
+        { method: "ping", params: {} },
+        { timeout: PING_TIMEOUT }
+      );
+      this.connected = response.data?.Success ?? response.data?.success ?? false;
       return this.connected;
     } catch (error) {
       this.connected = false;
@@ -43,24 +65,79 @@ class UnityBridgeClient {
     }
   }
 
+  /**
+   * Never throws. Every outcome (transport error, timeout, malformed body) is
+   * folded into the bridge's own {Success, Data, Error} envelope so the MCP layer
+   * can surface the real reason instead of a generic JSON-RPC -32603.
+   */
   async request(method: string, params: any = {}): Promise<any> {
     try {
-      const response = await this.client.post("/", {
-        method,
-        params,
-      });
-      return response.data;
+      const response = await this.client.post("/", { method, params });
+      const data = response.data;
+      if (!data || typeof data !== "object") {
+        return {
+          Success: false,
+          Data: null,
+          Error: `bridge ${method} returned non-object response (${typeof data})`,
+        };
+      }
+      this.connected = data.Success ?? data.success ?? this.connected;
+      return data;
     } catch (error: any) {
-      if (error.response) {
+      this.connected = false;
+      if (error?.response?.data) {
         return error.response.data;
       }
-      throw error;
+      const detail =
+        error?.code === "ECONNABORTED"
+          ? `timed out after ${this.client.defaults.timeout}ms`
+          : error?.message ?? String(error);
+      return {
+        Success: false,
+        Data: null,
+        Error: `bridge ${method} failed: ${detail} (url ${this.baseUrl})`,
+      };
     }
   }
 
   isConnected(): boolean {
     return this.connected;
   }
+}
+
+/**
+ * JSON.stringify that survives IL2CPP interop graphs (cycles, BigInt, functions)
+ * and never throws, plus a size cap for LLM/protocol friendliness.
+ */
+function serializeResult(value: unknown): string {
+  const seen = new WeakSet<object>();
+  let json: string;
+  try {
+    json = JSON.stringify(
+      value,
+      (_key, val) => {
+        if (typeof val === "bigint") return val.toString();
+        if (typeof val === "function") return `[function ${val.name || "anonymous"}]`;
+        if (typeof val === "object" && val !== null) {
+          if (seen.has(val)) return "[circular]";
+          seen.add(val);
+        }
+        return val;
+      },
+      2
+    );
+  } catch (error: any) {
+    return `[unserializable result: ${error?.message ?? error}]`;
+  }
+  if (json === undefined) {
+    return String(value);
+  }
+  const bytes = Buffer.from(json, "utf8");
+  if (bytes.length > MAX_TEXT_BYTES) {
+    const kept = bytes.subarray(0, MAX_TEXT_BYTES).toString("utf8");
+    return `${kept}\n... [truncated: kept ${MAX_TEXT_BYTES} of ${bytes.length} bytes; narrow the query (name_contains/limit/cursor) or raise UNITY_MCP_MAX_BYTES]`;
+  }
+  return json;
 }
 
 // MCP Server
@@ -640,49 +717,57 @@ class UnityExplorerMCPServer {
       };
     });
 
-    // Handle tool calls
+    // Handle tool calls. Nothing may throw out of this handler: the host turns any
+    // escaped error into the opaque "-32603 MCP tool invocation did not complete".
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      const { name, arguments: args } = request.params;
-
-      // unity_tail_log is served locally from disk; works even when the game is down.
-      if (name === "unity_tail_log") {
-        try {
-          const logResult = await tailLog({
-            path: args?.path as string | undefined,
-            lines: (args?.lines as number | undefined) ?? 100,
-            keyword: args?.keyword as string | undefined,
-          });
-          return {
-            content: [{ type: "text", text: JSON.stringify(logResult, null, 2) }],
-          };
-        } catch (error: any) {
-          return {
-            content: [{ type: "text", text: `Error: ${error.message || "Unknown error"}` }],
-            isError: true,
-          };
-        }
-      }
-
-      // Ensure bridge is connected
-      if (!this.bridge.isConnected()) {
-        const connected = await this.bridge.ping();
-        if (!connected) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: "Error: Cannot connect to Unity Bridge. Make sure UnityExplorer MCP Bridge is running in Unity.",
-              },
-            ],
-            isError: true,
-          };
-        }
-      }
-
       try {
-        let result: any;
+        return await this.dispatchTool(request.params.name, request.params.arguments as any);
+      } catch (error: any) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `ERROR: ${error?.message ?? String(error)}\n${error?.stack ?? ""}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    });
+  }
 
-        switch (name) {
+  private async dispatchTool(name: string, args: any): Promise<any> {
+    // unity_tail_log is served locally from disk; works even when the game is down.
+    if (name === "unity_tail_log") {
+      const logResult = await tailLog({
+        path: args?.path as string | undefined,
+        lines: (args?.lines as number | undefined) ?? 100,
+        keyword: args?.keyword as string | undefined,
+      });
+      return {
+        content: [{ type: "text", text: serializeResult(logResult) }],
+      };
+    }
+
+    // Ensure bridge is connected
+    if (!this.bridge.isConnected()) {
+      const connected = await this.bridge.ping();
+      if (!connected) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Error: Cannot connect to Unity Bridge. Make sure UnityExplorer MCP Bridge is running in Unity.",
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    let result: any;
+
+    switch (name) {
           case "unity_ping":
             result = await this.bridge.request("ping");
             break;
@@ -881,26 +966,14 @@ class UnityExplorerMCPServer {
             };
         }
 
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(result, null, 2),
-            },
-          ],
-        };
-      } catch (error: any) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error: ${error.message || "Unknown error"}`,
-            },
-          ],
-          isError: true,
-        };
-      }
-    });
+        const text = serializeResult(result);
+    // Bridge-reported failures (e.g. a C# compile error with compilerOutput in Data)
+    // still ship their payload, but flag the call so the caller sees it as an error.
+    const failed = result && typeof result === "object" && (result as any).Success === false;
+    return {
+      content: [{ type: "text", text }],
+      ...(failed ? { isError: true } : {}),
+    };
   }
 
   async run() {

@@ -177,7 +177,7 @@ cd UnityExplorerMCP
       "args": ["<REPO_PATH>/mcp-server/dist/server.js"],
       "env": {
         "UNITY_BRIDGE_URL": "http://127.0.0.1:12345",
-        "REQUEST_TIMEOUT": "30000",
+        "UNITY_BRIDGE_TIMEOUT": "120000",
         "UNITY_GAME_ROOT": "<GAME_ROOT_WITH_BEPINEX>"
       }
     }
@@ -198,7 +198,7 @@ cd UnityExplorerMCP
       "enabled": true,
       "environment": {
         "UNITY_BRIDGE_URL": "http://127.0.0.1:12345",
-        "REQUEST_TIMEOUT": "30000"
+        "UNITY_BRIDGE_TIMEOUT": "120000"
       }
     }
   }
@@ -277,7 +277,8 @@ unity_capabilities → search_members → find_objects_of_type → inspect
 | 变量 | 默认值 | 作用域 |
 |---|---|---|
 | `UNITY_BRIDGE_URL` | `http://127.0.0.1:12345` | Server → 桥地址 |
-| `REQUEST_TIMEOUT` | `30000` | Server 请求超时（毫秒） |
+| `UNITY_BRIDGE_TIMEOUT` | `120000` | Server → 桥请求超时（毫秒）；长 `execute_csharp`/IL2CPP 全扫需调大 |
+| `UNITY_MCP_MAX_BYTES` | `1500000` | 工具结果文本截断阈值（字节）；客户端扛不住大场景时调小 |
 | `UNITY_GAME_ROOT` | — | `unity_tail_log` 自动定位游戏根目录 |
 | `MCP_BRIDGE_PORT` | `12345` | 桥监听端口（游戏内读取，与 `UNITY_BRIDGE_URL` 保持一致） |
 | `MCP_ARRAY_LIMIT` | `500` | 数组内联上限（桥） |
@@ -304,7 +305,7 @@ curl -s http://127.0.0.1:12345/ -H "Content-Type: application/json" \
 
 - **DLL 没加载** —— 桥必须匹配 loader。BepInEx 5 会静默跳过 BepInEx 6 构建（看日志里的插件计数）。
   `mcs.dll` 必须与桥 DLL 同目录，否则 `unity_execute_csharp` 不可用。
-- **加载时超时** —— 切场景会占住 Unity 主线程。等游戏空闲后重试；`REQUEST_TIMEOUT` 太短会在加载期误报。
+- **加载时超时** —— 切场景会占住 Unity 主线程。等游戏空闲后重试；`UNITY_BRIDGE_TIMEOUT` 太短会在加载期误报。
 - **`STALE_HANDLE`** —— 会话已变化（切场景、重启）。重新解析句柄。
 - **`execute_csharp` 报 CS0584** —— 对 `Type[]` 优先用 `foreach` 而不是 LINQ；
   mcs 遇到裁剪过的 interop 存根会失败（UnityExplorer 自家 Console 同款问题）。

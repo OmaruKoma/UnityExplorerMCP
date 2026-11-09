@@ -7,7 +7,7 @@
       "enabled": true,
       "environment": {
         "UNITY_BRIDGE_URL": "http://127.0.0.1:12345",
-        "REQUEST_TIMEOUT": "30000",
+        "UNITY_BRIDGE_TIMEOUT": "120000",
         "UNITY_GAME_ROOT": "<GAME_ROOT_WITH_BEPINEX>"
       }
     }
