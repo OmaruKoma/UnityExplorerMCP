@@ -3,8 +3,12 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+#if CPP
+using Il2CppInterop.Runtime;
+#endif
 
 namespace UnityExplorer.MCPBridge
 {
@@ -292,7 +296,7 @@ namespace UnityExplorer.MCPBridge
                 foreach (Component component in camera.gameObject.GetComponents<Component>())
                 {
                     if (component == null) continue;
-                    string typeName = component.GetType().Name;
+                    string typeName = ComponentTypeName(component);
                     if (typeName.IndexOf("Cinemachine", StringComparison.OrdinalIgnoreCase) < 0)
                         continue;
                     if (!SetEnabled(component, false)) continue;
@@ -321,8 +325,39 @@ namespace UnityExplorer.MCPBridge
             return resumed;
         }
 
+        /// <summary>
+        /// IL2CPP hands back base-typed wrappers from GetComponents<Component>(),
+        /// so GetType() reports "Component" and reflection finds no `enabled`.
+        /// Read the native class name and cast through the interop wrapper instead.
+        /// </summary>
+        private static string ComponentTypeName(Component component)
+        {
+#if CPP
+            try
+            {
+                IntPtr klass = IL2CPP.il2cpp_object_get_class(component.Pointer);
+                return Marshal.PtrToStringAnsi(IL2CPP.il2cpp_class_get_name(klass));
+            }
+            catch { }
+#endif
+            try { return component.GetType().Name; }
+            catch { return "?"; }
+        }
+
         private static bool SetEnabled(Component component, bool enabled)
         {
+#if CPP
+            try
+            {
+                Behaviour behaviour = component.TryCast<Behaviour>();
+                if (behaviour != null)
+                {
+                    behaviour.enabled = enabled;
+                    return true;
+                }
+            }
+            catch { }
+#endif
             try
             {
                 PropertyInfo property = component.GetType().GetProperty("enabled",
@@ -339,7 +374,7 @@ namespace UnityExplorer.MCPBridge
             var names = new List<string>();
             foreach (var component in components)
             {
-                try { names.Add(component.GetType().Name); }
+                try { names.Add(ComponentTypeName(component)); }
                 catch { names.Add("?"); }
             }
             return names;
