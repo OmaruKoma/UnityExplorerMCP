@@ -23,6 +23,11 @@ namespace UnityExplorer.MCPBridge
                 texture = CaptureTexture();
                 if (texture == null) throw new Exception("screen capture returned no texture");
 
+                // ScreenCapture only works at end-of-frame; on this request thread it
+                // returns a cleared buffer. A single-colour image is that failure, not
+                // a scene with one colour, so say so instead of handing back grey.
+                string flat = DetectFlat(texture);
+
                 byte[] png = EncodePng(texture);
                 int scale = 0;
                 while (png.Length > maxBytes && scale < 4)
@@ -44,6 +49,13 @@ namespace UnityExplorer.MCPBridge
                     { "scaled", scale },
                     { "base64", Convert.ToBase64String(png) }
                 };
+                if (flat != null)
+                {
+                    result["flat_color"] = flat;
+                    result["warning"] = "Screenshot is a single flat colour: ScreenCapture only "
+                        + "produces a frame inside the end-of-frame callback. Use unity_render_object "
+                        + "(offscreen camera) or unity_frame_camera + a capture on the next frame.";
+                }
                 if (!string.IsNullOrEmpty(outputPath))
                 {
                     try
@@ -67,6 +79,132 @@ namespace UnityExplorer.MCPBridge
                     try { UnityEngine.Object.Destroy(texture); } catch { }
                 }
             }
+        }
+
+        /// <summary>
+        /// Points a live game camera at a target: position derived from the target's
+        /// bounds, framed so the whole object fits. Unlike RenderObject this drives a
+        /// real camera, so the player view and screen capture change too. The original
+        /// transform is returned so the caller can undo it (restore=true does that
+        /// immediately).
+        /// </summary>
+        public static Dictionary<string, object> FrameCamera(Camera camera,
+            UnityEngine.Object target, float distanceScale, float offsetX, float offsetY,
+            bool lookAt, bool restore)
+        {
+            if (camera == null) throw new Exception("Camera is null");
+            if (target == null) throw new Exception("Target is null");
+            if (distanceScale <= 0f) distanceScale = 1.15f;
+
+            Bounds bounds = ComputeBounds(target);
+            Transform camTransform = camera.transform;
+            Vector3 oldPosition = camTransform.position;
+            Quaternion oldRotation = camTransform.rotation;
+            float oldFov = camera.fieldOfView;
+            float oldNear = camera.nearClipPlane;
+            float oldFar = camera.farClipPlane;
+
+            float radius = Math.Max(bounds.extents.magnitude, 0.01f);
+            float distance = radius / Mathf.Sin(Mathf.Max(camera.fieldOfView, 1f) * 0.5f * Mathf.Deg2Rad)
+                * distanceScale;
+
+            // Front view: target's own forward axis when it has one, world -Z otherwise.
+            Vector3 forward = Vector3.back;
+            try
+            {
+                Transform t = target as Transform
+                    ?? (target as Component)?.transform;
+                if (t != null) forward = -t.forward;
+            }
+            catch { }
+            if (forward.sqrMagnitude < 0.0001f) forward = Vector3.back;
+            forward.Normalize();
+            Vector3 up = Vector3.up;
+
+            Vector3 position = bounds.center + forward * distance
+                + camTransform.right * (offsetX * radius)
+                + camTransform.up * (offsetY * radius);
+
+            camTransform.position = position;
+            if (lookAt) camTransform.LookAt(bounds.center, up);
+
+            camera.nearClipPlane = Mathf.Max(0.01f, distance - radius * 2f);
+            camera.farClipPlane = Mathf.Max(camera.nearClipPlane + 0.1f, distance + radius * 4f);
+
+            var result = new Dictionary<string, object>
+            {
+                { "camera", camera.name },
+                { "camera_handle", Handle.Format(camera.GetInstanceID()) },
+                { "target_bounds_center", Vec(bounds.center) },
+                { "target_bounds_size", Vec(bounds.size) },
+                { "camera_position", Vec(camTransform.position) },
+                { "camera_rotation", Vec(camTransform.eulerAngles) },
+                { "distance", distance },
+                { "near_clip", camera.nearClipPlane },
+                { "far_clip", camera.farClipPlane },
+                { "restored", false },
+                { "previous", new Dictionary<string, object>
+                    {
+                        { "position", Vec(oldPosition) },
+                        { "rotation", Vec(oldRotation.eulerAngles) },
+                        { "field_of_view", oldFov },
+                        { "near_clip", oldNear },
+                        { "far_clip", oldFar }
+                    } }
+            };
+
+            if (restore)
+            {
+                camTransform.position = oldPosition;
+                camTransform.rotation = oldRotation;
+                camera.fieldOfView = oldFov;
+                camera.nearClipPlane = oldNear;
+                camera.farClipPlane = oldFar;
+                result["restored"] = true;
+            }
+            else
+            {
+                result["hint"] = "Camera left in the new position. Call unity_frame_camera again with "
+                    + "restore=true (same camera) to put it back, or reuse the 'previous' block.";
+            }
+            return result;
+        }
+
+        private static Dictionary<string, object> Vec(Vector3 v)
+        {
+            return new Dictionary<string, object>
+            {
+                { "x", v.x }, { "y", v.y }, { "z", v.z }
+            };
+        }
+
+        /// <summary>
+        /// Returns the colour name when every sampled pixel matches, else null.
+        /// Sampled on a grid so a 2560x1600 read stays cheap.
+        /// </summary>
+        private static string DetectFlat(Texture2D texture)
+        {
+            try
+            {
+                if (texture == null || texture.width < 2 || texture.height < 2) return null;
+                Color32[] pixels = texture.GetPixels32();
+                if (pixels == null || pixels.Length == 0) return null;
+                Color32 first = pixels[0];
+                int stepX = Math.Max(1, texture.width / 32);
+                int stepY = Math.Max(1, texture.height / 32);
+                for (int y = 0; y < texture.height; y += stepY)
+                {
+                    int row = y * texture.width;
+                    for (int x = 0; x < texture.width; x += stepX)
+                    {
+                        Color32 c = pixels[row + x];
+                        if (c.r != first.r || c.g != first.g || c.b != first.b || c.a != first.a)
+                            return null;
+                    }
+                }
+                return "rgba(" + first.r + ", " + first.g + ", " + first.b + ", " + first.a + ")";
+            }
+            catch { return null; }
         }
 
         private static Texture2D CaptureTexture()

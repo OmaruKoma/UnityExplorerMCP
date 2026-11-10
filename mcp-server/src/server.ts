@@ -353,6 +353,21 @@ const BRIDGE_ROUTES: Record<
       height: a?.height,
     },
   }),
+  unity_frame_camera: (a) => ({
+    method: "frame_camera",
+    params: {
+      instance_id: a?.instance_id,
+      handle: a?.handle,
+      target: a?.target,
+      target_handle: a?.target_handle,
+      camera_name: a?.camera_name,
+      distance_scale: a?.distance_scale,
+      offset_x: a?.offset_x,
+      offset_y: a?.offset_y,
+      look_at: a?.look_at,
+      restore: a?.restore,
+    },
+  }),
 };
 
 async function bridgeCall(

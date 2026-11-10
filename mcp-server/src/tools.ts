@@ -737,6 +737,34 @@ export const TOOL_DEFS: ToolDef[] = [
       height: { type: "number", description: "Image height (default 512, max 2048)" },
     })
   ),
+  tool(
+    "unity_frame_camera",
+    "Point a real game camera at a target object (front view, framed to its bounds). Moves the live camera, so the player view and subsequent screenshots change. Pass restore=true to put the camera back immediately; the previous transform is always returned. Defaults to the main camera and leaves it in the new position.",
+    schema({
+      target_handle: {
+        type: "string",
+        description: "Handle of the object to frame (e.g. a character root)",
+      },
+      target: { type: "number", description: "Instance id of the target (alternative to target_handle)" },
+      camera_name: {
+        type: "string",
+        description: 'Camera to drive: a GameObject name, or "main" (default: main, else any)',
+      },
+      ...handle,
+      distance_scale: {
+        type: "number",
+        description: "Multiplier on the framing distance (default 1.15; raise to pull back)",
+      },
+      offset_x: { type: "number", description: "Sideways offset in target radii" },
+      offset_y: { type: "number", description: "Vertical offset in target radii" },
+      look_at: { type: "boolean", description: "Aim at the target centre (default true)" },
+      restore: {
+        type: "boolean",
+        description: "Restore the camera transform immediately after framing (default false)",
+      },
+    }, ["target_handle"]),
+    "exec"
+  ),
 ];
 
 export const TOOL_NAMES = new Set(TOOL_DEFS.map((t) => t.name));

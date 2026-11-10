@@ -804,6 +804,109 @@ namespace UnityExplorer.MCPBridge
             }
         }
 
+        private MCPResponse HandleFrameCamera(MCPRequest request)
+        {
+            // Camera first: it may be a handle, an instance id, or "main".
+            Camera camera = null;
+            if (request.Params is JsonElement j)
+            {
+                JsonElement tmp;
+                if (j.TryGetProperty("camera_name", out tmp))
+                {
+                    try
+                    {
+                        string wanted = tmp.GetString();
+                        if (string.Equals(wanted, "main", StringComparison.OrdinalIgnoreCase))
+                            camera = Camera.main;
+                        else if (!string.IsNullOrEmpty(wanted))
+                            camera = FindCameraByName(wanted);
+                    }
+                    catch { }
+                }
+            }
+            int instanceId = ExtractInstanceId(request);
+            if (camera == null && instanceId != 0)
+            {
+                var found = FindObjectById(instanceId);
+                camera = found as Camera;
+                if (camera == null)
+                    return ToolError("NOT_A_CAMERA", "Target " + instanceId + " is " +
+                        (found != null ? found.GetType().Name : "missing") + ", not UnityEngine.Camera");
+            }
+            if (camera == null)
+            {
+                camera = Camera.main;
+                if (camera == null) camera = FindAnyEnabledCamera();
+            }
+            if (camera == null)
+                return ToolError("NO_CAMERA", "No camera found; pass camera_name or a Camera handle");
+
+            int targetId = 0;
+            float distanceScale = 1.15f;
+            float offsetX = 0f;
+            float offsetY = 0f;
+            bool lookAt = true;
+            bool restore = false;
+            if (request.Params is JsonElement p)
+            {
+                JsonElement tmp;
+                if (p.TryGetProperty("target", out tmp) && tmp.ValueKind == JsonValueKind.Number)
+                { try { targetId = tmp.GetInt32(); } catch { } }
+                if (p.TryGetProperty("target_handle", out tmp) && tmp.ValueKind == JsonValueKind.String)
+                {
+                    try
+                    {
+                        string session;
+                        int parsed;
+                        if (Handle.TryParse(tmp.GetString(), out session, out parsed)) targetId = parsed;
+                    }
+                    catch { }
+                }
+                if (p.TryGetProperty("distance_scale", out tmp)) { try { distanceScale = (float)tmp.GetDouble(); } catch { } }
+                if (p.TryGetProperty("offset_x", out tmp)) { try { offsetX = (float)tmp.GetDouble(); } catch { } }
+                if (p.TryGetProperty("offset_y", out tmp)) { try { offsetY = (float)tmp.GetDouble(); } catch { } }
+                if (p.TryGetProperty("look_at", out tmp)) { try { lookAt = tmp.GetBoolean(); } catch { } }
+                if (p.TryGetProperty("restore", out tmp)) { try { restore = tmp.GetBoolean(); } catch { } }
+            }
+            if (targetId == 0)
+                return InvalidParams("frame_camera needs target / target_handle (the object to point at)");
+
+            var target = FindObjectById(targetId);
+            if (target == null)
+                return ToolError("OBJECT_NOT_FOUND", StaleHandleError(targetId));
+
+            try
+            {
+                return new MCPResponse
+                {
+                    Success = true,
+                    Data = ScreenshotCapture.FrameCamera(camera, target, distanceScale,
+                        offsetX, offsetY, lookAt, restore)
+                };
+            }
+            catch (Exception ex)
+            {
+                return ToolError("FRAME_CAMERA_FAILED", ex.Message);
+            }
+        }
+
+        private static Camera FindCameraByName(string wanted)
+        {
+            foreach (Camera camera in Camera.allCameras)
+            {
+                if (camera == null) continue;
+                try { if (camera.name == wanted) return camera; } catch { }
+            }
+            return null;
+        }
+
+        private static Camera FindAnyEnabledCamera()
+        {
+            foreach (Camera camera in Camera.allCameras)
+                if (camera != null) return camera;
+            return null;
+        }
+
         private MCPResponse HandleActivityLog(MCPRequest request)
         {
             int limit = 50;

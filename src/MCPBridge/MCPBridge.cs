@@ -44,7 +44,7 @@ namespace UnityExplorer.MCPBridge
             "snapshot_object", "diff_snapshot", "undo_write",
             "start_instance_scan", "get_instance_scan", "search_values",
             "read_array", "decode_byte_array",
-            "dump_material", "render_object",
+            "dump_material", "render_object", "frame_camera",
             "set_label", "remove_label", "list_labels",
             "start_method_trace", "stop_method_trace", "clear_method_trace",
             "list_method_traces", "get_method_trace", "build_call_graph",
@@ -388,6 +388,7 @@ namespace UnityExplorer.MCPBridge
                     case "decode_byte_array": response = HandleDecodeByteArray(request); break;
                     case "dump_material": response = HandleDumpMaterial(request); break;
                     case "render_object": response = HandleRenderObject(request); break;
+                    case "frame_camera": response = HandleFrameCamera(request); break;
                     case "set_label": response = HandleSetLabel(request); break;
                     case "remove_label": response = HandleRemoveLabel(request); break;
                     case "list_labels": response = HandleListLabels(request); break;
