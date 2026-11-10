@@ -61,7 +61,8 @@ function checkCatalog() {
     'unity_remove_label', 'unity_list_labels', 'unity_start_method_trace',
     'unity_stop_method_trace', 'unity_clear_method_trace', 'unity_list_method_traces',
     'unity_get_method_trace', 'unity_build_call_graph', 'unity_capture_screenshot',
-    'unity_activity_log', 'unity_execute_csharp', 'unity_tail_log'
+    'unity_activity_log', 'unity_execute_csharp', 'unity_tail_log',
+    'unity_dump_material', 'unity_render_object'
   ];
   const names = tools.map((t) => t.name);
   const missing = required.filter((n) => !names.includes(n));

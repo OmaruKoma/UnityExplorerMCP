@@ -334,6 +334,25 @@ const BRIDGE_ROUTES: Record<
     method: "capture_screenshot",
     params: { output_path: a?.output_path, max_bytes: a?.max_bytes },
   }),
+  unity_dump_material: (a) => ({
+    method: "dump_material",
+    params: {
+      instance_id: a?.instance_id,
+      handle: a?.handle,
+      property_limit: a?.property_limit,
+      include_defaults: a?.include_defaults,
+      include_hidden: a?.include_hidden,
+    },
+  }),
+  unity_render_object: (a) => ({
+    method: "render_object",
+    params: {
+      instance_id: a?.instance_id,
+      handle: a?.handle,
+      width: a?.width,
+      height: a?.height,
+    },
+  }),
 };
 
 async function bridgeCall(
@@ -443,7 +462,7 @@ async function runTool(name: string, args: any): Promise<ToolResult> {
   const { method, params } = route(args ?? {});
   const call = await bridgeCall(method, params);
 
-  if (name === "unity_capture_screenshot") {
+  if (name === "unity_capture_screenshot" || name === "unity_render_object") {
     const data = call.envelope?.Data ?? call.envelope?.data;
     if (!call.failed && data?.base64) {
       return {
@@ -465,6 +484,24 @@ async function runTool(name: string, args: any): Promise<ToolResult> {
   };
 }
 
+/**
+ * Getter-shaped names, mirroring BridgePermissions.IsReadOnlyMethod. Batch uses
+ * this to decide whether an invoke_method call is a read or a mutation.
+ */
+const READ_ONLY_EXACT = new Set(["length", "count", "name", "tostring", "clone", "equals"]);
+const READ_ONLY_PREFIXES = [
+  "get", "is", "has", "can", "find", "contains", "count", "peek",
+  "toarray", "tolist", "tostring", "lookup", "resolve", "query",
+  "read", "enumerate", "calculate", "compute", "check",
+];
+
+function isReadOnlyMethod(name: string): boolean {
+  const lower = name.trim().toLowerCase();
+  if (!lower) return false;
+  if (READ_ONLY_EXACT.has(lower)) return true;
+  return READ_ONLY_PREFIXES.some((prefix) => lower.startsWith(prefix));
+}
+
 async function runBatch(args: any): Promise<ToolResult> {
   const calls = Array.isArray(args?.calls) ? args.calls : [];
   if (calls.length === 0) return bridgeError("batch needs at least one call");
@@ -478,6 +515,7 @@ async function runBatch(args: any): Promise<ToolResult> {
   for (let i = 0; i < calls.length; i++) {
     const call = calls[i] ?? {};
     const tool = String(call.tool ?? "");
+    const invokeTarget = tool === "unity_invoke_method" ? String(call.arguments?.method ?? "") : "";
     if (!BATCH_ALLOWED.has(tool)) {
       results.push({
         tool,
@@ -485,6 +523,22 @@ async function runBatch(args: any): Promise<ToolResult> {
         error: {
           code: "BATCH_TOOL_NOT_ALLOWED",
           message: `${tool} is not a read-only batch tool`,
+        },
+      });
+      continue;
+    }
+    if (tool === "unity_invoke_method" && !isReadOnlyMethod(invokeTarget)) {
+      // Reads like GetFloat/GetColor/GetTexture are batched; setters, Destroy
+      // and anything else get-free stay out, so a batch can never mutate.
+      results.push({
+        tool,
+        method: invokeTarget,
+        ok: false,
+        error: {
+          code: "BATCH_METHOD_NOT_READ_ONLY",
+          message:
+            `${invokeTarget || "(missing method)"} is not a getter-shaped name; ` +
+            "batch only allows Get*/Is*/Has*/Find*/ToArray* etc.",
         },
       });
       continue;

@@ -67,8 +67,11 @@
 
 ## 1.3 新增
 
-- **46 个工具**（原 24）：快照/差异/撤销、时间切片实例扫描、按值搜索、数组分页、字节解码、
+- **48 个工具**（原 24）：快照/差异/撤销、时间切片实例扫描、按值搜索、数组分页、字节解码、
   标签别名、PNG 截图、活动日志。
+- **材质转储与离屏渲染** —— `unity_dump_material` 一次返回 shader、keywords 和所有非默认属性
+  （贴图内联名字）；`unity_render_object` 用临时相机单独渲染目标对象，游戏暂停或被 UI 遮挡时
+  也能出图。
 - **桥内能力门禁 + 审计** —— `preset=read-only` 或逐项 `MCP_ALLOW_*`；变更类调用写入
   `unity_activity_log`。
 - **多游戏发现** —— 每个桥发布 pid/port 记录，Server 端列出并选择目标，不再靠猜。
@@ -285,7 +288,7 @@ cd UnityExplorerMCP
 
 ## 工具列表
 
-共 46 个工具。每次会话先调 `unity_capabilities`——它会说明当前附着游戏的后端、会话、pid、
+共 48 个工具。每次会话先调 `unity_capabilities`——它会说明当前附着游戏的后端、会话、pid、
 权限、特性、限额与封送能力。
 
 **会话与发现**
@@ -326,6 +329,7 @@ cd UnityExplorerMCP
 | `unity_invoke_method` / `unity_invoke_static` | 方法调用（`out`/`ref` 由 `outArgs` 返回） |
 | `unity_read_array` | 分页数组/列表成员；引用元素返回句柄 |
 | `unity_decode_byte_array` | 把 `byte[]` 解成 text、JSON、hex、base64 或 msgpack |
+| `unity_dump_material` | 一次拿到材质 shader、keywords 与所有非默认属性 |
 
 **状态验证**
 
@@ -344,6 +348,7 @@ cd UnityExplorerMCP
 | `unity_start_method_trace` / `unity_stop_method_trace` / `unity_clear_method_trace` | hook 一个托管方法（Mono） |
 | `unity_list_method_traces` / `unity_get_method_trace` / `unity_build_call_graph` | 读真实调用与 caller→target 边 |
 | `unity_capture_screenshot` | 当前帧 PNG image content；可另存文件 |
+| `unity_render_object` | 单对象离屏渲染成 PNG；暂停或被 UI 遮挡时仍可用 |
 
 **运行时**
 
@@ -506,7 +511,7 @@ curl -s http://127.0.0.1:12345/ -H "Content-Type: application/json" \
 
 ```powershell
 .\build.ps1 -Backend Server      # 只编 mcp-server
-node test-tools.js               # 46 个工具、注解、batch 校验（不用开游戏）
+node test-tools.js               # 48 个工具、注解、batch 校验（不用开游戏）
 node test.js                     # 真机桥测试（游戏开着）
 $env:UNITY_BACKEND = "Mono"; node test.js
 node verify.js                   # 仓库完整性

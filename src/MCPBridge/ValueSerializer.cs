@@ -163,16 +163,18 @@ namespace UnityExplorer.MCPBridge
                 catch { }
             }
 
-            // Unity objects keep their GetInstanceID() handle convention.
-            if (value is UnityEngine.Object uobj)
+            // Unity objects keep their GetInstanceID() handle convention; the name is
+        // inlined because it is the one thing every caller asks for next.
+        if (value is UnityEngine.Object uobj)
+        {
+            return new Dictionary<string, object>
             {
-                return new Dictionary<string, object>
-                {
-                    { "type", full },
-                    { "instance_id", uobj.GetInstanceID() },
-                    { "preview", SafePreview(value) }
-                };
-            }
+                { "type", full },
+                { "name", SafeName(uobj) },
+                { "instance_id", uobj.GetInstanceID() },
+                { "preview", SafePreview(value) }
+            };
+        }
 
             // Structs (Vector3, Rect, Matrix4x4, ...) are boxed copies: a registry
             // id would change on every read and make snapshot diffs noisy.
@@ -379,6 +381,11 @@ namespace UnityExplorer.MCPBridge
                 return s != null && s.Length > 256 ? s.Substring(0, 256) + "..." : (s ?? "null");
             }
             catch { return "<unprintable>"; }
+        }
+
+        private static string SafeName(UnityEngine.Object value)
+        {
+            try { return value.name; } catch { return null; }
         }
     }
 }

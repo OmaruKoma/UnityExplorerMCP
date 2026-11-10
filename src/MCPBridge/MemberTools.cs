@@ -15,6 +15,10 @@ namespace UnityExplorer.MCPBridge
         public object Value;
         public bool IsStatic;
         public bool IsProperty;
+        /// <summary>Declaring class, so callers can see inherited members.</summary>
+        public string DeclaringType;
+        /// <summary>The resolved FieldInfo/PropertyInfo, for CanWrite checks.</summary>
+        public MemberInfo Member;
     }
 
     /// <summary>Shared field/property access for snapshots, arrays and value search.</summary>
@@ -149,6 +153,8 @@ namespace UnityExplorer.MCPBridge
                     total++;
                     if (limit > 0 && result.Count >= limit) continue;
                     MemberValue entry = NewEntry(type, field.Name, field.FieldType, field.IsStatic, false);
+                    entry.DeclaringType = field.DeclaringType != null ? field.DeclaringType.FullName : null;
+                    entry.Member = field;
                     try { entry.Value = field.GetValue(field.IsStatic ? null : instance); }
                     catch (Exception ex) { entry.Value = "<error: " + ex.GetType().Name + ">"; }
                     result.Add(entry);
@@ -173,6 +179,8 @@ namespace UnityExplorer.MCPBridge
                     MethodInfo getter = property.GetGetMethod(true);
                     bool isStatic = getter != null && getter.IsStatic;
                     MemberValue entry = NewEntry(type, property.Name, property.PropertyType, isStatic, true);
+                    entry.DeclaringType = property.DeclaringType != null ? property.DeclaringType.FullName : null;
+                    entry.Member = property;
                     try { entry.Value = property.GetValue(isStatic ? null : instance, null); }
                     catch (Exception ex) { entry.Value = "<error: " + ex.GetType().Name + ">"; }
                     result.Add(entry);

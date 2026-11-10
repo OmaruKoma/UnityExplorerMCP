@@ -92,6 +92,127 @@ namespace UnityExplorer.MCPBridge
             return texture;
         }
 
+        /// <summary>
+        /// Renders a target object offscreen with a throwaway camera. Screen capture
+        /// returns whatever the game composited last (UI overlays, pause menus, a
+        /// blank frame while paused), which is useless for "what does this look
+        /// like". Here we frame the object's bounds, render to a RenderTexture and
+        /// read that back, so the result is independent of game state.
+        /// </summary>
+        public static Dictionary<string, object> RenderObject(UnityEngine.Object target,
+            int width, int height, int maxBytes)
+        {
+            if (target == null) throw new Exception("Target is null");
+            if (width <= 0) width = 512;
+            if (height <= 0) height = 512;
+            if (width > 2048) width = 2048;
+            if (height > 2048) height = 2048;
+            if (maxBytes <= 0) maxBytes = BridgeConfig.MaxScreenshotBytes;
+
+            Bounds bounds = ComputeBounds(target);
+            GameObject cameraObject = null;
+            Camera camera = null;
+            RenderTexture render = null;
+            Texture2D texture = null;
+            RenderTexture previousActive = RenderTexture.active;
+            try
+            {
+                cameraObject = new GameObject("MCP Render Camera");
+                camera = cameraObject.AddComponent<Camera>();
+                camera.enabled = false;
+                camera.clearFlags = CameraClearFlags.SolidColor;
+                camera.backgroundColor = new Color(0f, 0f, 0f, 0f);
+                camera.cullingMask = ~0;
+                camera.fieldOfView = 35f;
+
+                // Frame the whole object: radius from bounds, distance from the FOV.
+                float radius = Math.Max(bounds.extents.magnitude, 0.01f);
+                float distance = radius / Mathf.Sin(camera.fieldOfView * 0.5f * Mathf.Deg2Rad) * 1.15f;
+                Vector3 dir = new Vector3(0.6f, 0.35f, 1f).normalized;
+                cameraObject.transform.position = bounds.center + dir * distance;
+                cameraObject.transform.LookAt(bounds.center);
+                camera.nearClipPlane = Math.Max(0.01f, distance - radius * 2f);
+                camera.farClipPlane = distance + radius * 2f;
+
+                render = RenderTexture.GetTemporary(width, height, 24, RenderTextureFormat.ARGB32);
+                camera.targetTexture = render;
+                camera.Render();
+                RenderTexture.active = render;
+                texture = new Texture2D(width, height, TextureFormat.RGBA32, false);
+                texture.ReadPixels(new Rect(0, 0, width, height), 0, 0);
+                texture.Apply();
+                RenderTexture.active = previousActive;
+
+                byte[] png = EncodePng(texture);
+                var result = new Dictionary<string, object>
+                {
+                    { "mime_type", "image/png" },
+                    { "width", width },
+                    { "height", height },
+                    { "bytes", png.Length },
+                    { "bounds_center", new Dictionary<string, object>
+                        {
+                            { "x", bounds.center.x }, { "y", bounds.center.y }, { "z", bounds.center.z }
+                        } },
+                    { "bounds_size", new Dictionary<string, object>
+                        {
+                            { "x", bounds.size.x }, { "y", bounds.size.y }, { "z", bounds.size.z }
+                        } },
+                    { "base64", png.Length <= maxBytes ? Convert.ToBase64String(png) : null }
+                };
+                if (png.Length > maxBytes)
+                    result["note"] = "PNG exceeds max bytes; lower width/height or raise MCP_MAX_SCREENSHOT_BYTES";
+                return result;
+            }
+            finally
+            {
+                RenderTexture.active = previousActive;
+                if (camera != null)
+                {
+                    try { camera.targetTexture = null; } catch { }
+                }
+                if (texture != null) UnityEngine.Object.Destroy(texture);
+                if (render != null) RenderTexture.ReleaseTemporary(render);
+                if (cameraObject != null) UnityEngine.Object.Destroy(cameraObject);
+            }
+        }
+
+        /// <summary>Renderer bounds when available, else transform + collider fallback.</summary>
+        private static Bounds ComputeBounds(UnityEngine.Object target)
+        {
+            Component component = target as Component;
+            GameObject gameObject = target as GameObject ?? (component != null ? component.gameObject : null);
+            if (gameObject != null)
+            {
+                try
+                {
+                    var renderers = gameObject.GetComponentsInChildren<Renderer>(true);
+                    bool first = true;
+                    Bounds combined = default(Bounds);
+                    foreach (var renderer in renderers)
+                    {
+                        if (renderer == null) continue;
+                        if (first) { combined = renderer.bounds; first = false; }
+                        else combined.Encapsulate(renderer.bounds);
+                    }
+                    if (!first) return combined;
+
+                    var colliders = gameObject.GetComponentsInChildren<Collider>(true);
+                    foreach (var collider in colliders)
+                    {
+                        if (collider == null) continue;
+                        if (first) { combined = collider.bounds; first = false; }
+                        else combined.Encapsulate(collider.bounds);
+                    }
+                    if (!first) return combined;
+                }
+                catch { }
+                var at = gameObject.transform.position;
+                return new Bounds(at, Vector3.one);
+            }
+            return new Bounds(Vector3.zero, Vector3.one);
+        }
+
         private static byte[] EncodePng(Texture2D texture)
         {
             Type conversion = FindType("UnityEngine.ImageConversion");

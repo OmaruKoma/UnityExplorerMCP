@@ -328,11 +328,17 @@ namespace UnityExplorer.MCPBridge
         private static object SerializeElement(object item)
         {
             object serialized = ValueSerializer.Serialize(item, "hex");
-            if (item is UnityEngine.Object)
+            var unityObject = item as UnityEngine.Object;
+            if (unityObject != null)
             {
                 var dict = serialized as Dictionary<string, object>;
                 if (dict != null)
-                    dict["handle"] = Handle.Format(((UnityEngine.Object)item).GetInstanceID());
+                {
+                    dict["handle"] = Handle.Format(unityObject.GetInstanceID());
+                    // Inline name: otherwise callers need get_property("name")
+                    // per element just to know what they are looking at.
+                    dict["name"] = unityObject.name;
+                }
             }
             return serialized;
         }

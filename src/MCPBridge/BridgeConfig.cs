@@ -49,6 +49,12 @@ namespace UnityExplorer.MCPBridge
             Preset != "read-only" && GetBool("MCP_ALLOW_EXECUTE", "allow_execute", true);
         public static readonly bool AllowTrace =
             Preset != "read-only" && GetBool("MCP_ALLOW_TRACE", "allow_trace", true);
+        /// <summary>
+        /// Getter-shaped invoke_method calls (GetFloat, GetTexture, ...) stay
+        /// available in the read-only preset; setters and destructive calls do not.
+        /// </summary>
+        public static readonly bool AllowInvokeReadOnly =
+            Preset == "read-only" && GetBool("MCP_ALLOW_INVOKE_READONLY", "allow_invoke_readonly", true);
 
         public static Dictionary<string, object> Permissions()
         {
@@ -58,6 +64,7 @@ namespace UnityExplorer.MCPBridge
                 { "read", true },
                 { "write", AllowWrite },
                 { "invoke", AllowInvoke },
+                { "invoke_read_only", AllowInvoke || AllowInvokeReadOnly },
                 { "execute", AllowExecute },
                 { "trace", AllowTrace }
             };

@@ -70,8 +70,12 @@ page; if none matches the version you need, build from source (Option B below).
 
 ## What's new in 1.3
 
-- **46 tools** (up from 24): snapshots/diff/undo, time-sliced instance scans, value search,
+- **48 tools** (up from 24): snapshots/diff/undo, time-sliced instance scans, value search,
   array paging, byte decoding, labels/aliases, PNG capture, activity log.
+- **Material dump and offscreen render** — `unity_dump_material` returns shader, keywords and
+  every non-default property (textures report their names) in one call; `unity_render_object`
+  renders a single object through a throwaway camera, so a paused or UI-covered game still
+  produces a usable image.
 - **Bridge-side capability gates + audit** — `preset=read-only` or per-capability
   `MCP_ALLOW_*`; mutating calls are recorded in `unity_activity_log`.
 - **Multi-game discovery** — each bridge publishes a pid/port record; the server lists and
@@ -293,7 +297,7 @@ Then ask your agent to call `unity_capabilities`. If it answers, the whole chain
 
 ## Tools
 
-46 tools. Start every session with `unity_capabilities` — it reports backend, session, pid,
+48 tools. Start every session with `unity_capabilities` — it reports backend, session, pid,
 permissions, features, limits and marshalling support for the game you are attached to.
 
 **Session and discovery**
@@ -334,6 +338,7 @@ permissions, features, limits and marshalling support for the game you are attac
 | `unity_invoke_method` / `unity_invoke_static` | Calls (`out`/`ref` returned as `outArgs`) |
 | `unity_read_array` | Page an array/list member; reference elements get handles |
 | `unity_decode_byte_array` | Decode a `byte[]` as text, JSON, hex, base64 or msgpack |
+| `unity_dump_material` | Shader, keywords and all non-default properties of a Material in one call |
 
 **State verification**
 
@@ -352,6 +357,7 @@ permissions, features, limits and marshalling support for the game you are attac
 | `unity_start_method_trace` / `unity_stop_method_trace` / `unity_clear_method_trace` | Hook a managed method (Mono) |
 | `unity_list_method_traces` / `unity_get_method_trace` / `unity_build_call_graph` | Read real calls and caller→target edges |
 | `unity_capture_screenshot` | Current frame as PNG image content; optional file copy |
+| `unity_render_object` | Render one object offscreen to PNG; works while paused or UI-covered |
 
 **Runtime**
 
@@ -523,7 +529,7 @@ inspect first, change second; use snapshots/diff and `unity_undo_write` while ex
 
 ```powershell
 .\build.ps1 -Backend Server      # mcp-server only
-node test-tools.js               # 46 tools, annotations, batch guard (no game needed)
+node test-tools.js               # 48 tools, annotations, batch guard (no game needed)
 node test.js                     # live bridge tests (game running)
 $env:UNITY_BACKEND = "Mono"; node test.js
 node verify.js                   # repo integrity

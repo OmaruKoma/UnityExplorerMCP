@@ -707,6 +707,36 @@ export const TOOL_DEFS: ToolDef[] = [
     ),
     "exec"
   ),
+  tool(
+    "unity_dump_material",
+    "Dump a Material in one call: shader, render queue, keywords and every non-default shader property (float/color/vector/texture). Textures report their name inline. Replaces GetFloat×N + GetColor×N + GetTexture×N.",
+    schema({
+      ...instanceId,
+      ...handle,
+      property_limit: {
+        type: "number",
+        description: "Max properties returned (default 200)",
+      },
+      include_defaults: {
+        type: "boolean",
+        description: "Also return properties left at their default (default false)",
+      },
+      include_hidden: {
+        type: "boolean",
+        description: "Include HideInInspector properties (default false)",
+      },
+    })
+  ),
+  tool(
+    "unity_render_object",
+    "Render one object offscreen to PNG with a throwaway camera. Works while the game is paused or covered by UI, unlike capture_screenshot.",
+    schema({
+      ...instanceId,
+      ...handle,
+      width: { type: "number", description: "Image width (default 512, max 2048)" },
+      height: { type: "number", description: "Image height (default 512, max 2048)" },
+    })
+  ),
 ];
 
 export const TOOL_NAMES = new Set(TOOL_DEFS.map((t) => t.name));
@@ -715,9 +745,10 @@ export const TOOL_NAMES = new Set(TOOL_DEFS.map((t) => t.name));
 export const BATCH_ALLOWED = new Set(
   TOOL_DEFS.filter(
     (t) =>
-      t.annotations.readOnlyHint &&
+      (t.annotations.readOnlyHint || t.name === "unity_invoke_method") &&
       t.name !== "unity_batch" &&
       t.name !== "unity_capture_screenshot" &&
+      t.name !== "unity_render_object" &&
       t.name !== "unity_list_bridges" &&
       t.name !== "unity_select_bridge"
   ).map((t) => t.name)

@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using UnityEngine;
 #if CPP
 using Il2CppInterop.Runtime;
 #endif
@@ -514,6 +515,84 @@ namespace UnityExplorer.MCPBridge
             catch (Exception ex)
             {
                 return ToolError("READ_ARRAY_FAILED", ex.Message);
+            }
+        }
+
+        private MCPResponse HandleDumpMaterial(MCPRequest request)
+        {
+            Type type;
+            object instance;
+            bool isStatic;
+            string target;
+            MCPResponse error;
+            if (!ResolveTarget(request, out type, out instance, out isStatic, out target, out error))
+                return error;
+            if (isStatic || instance == null)
+                return InvalidParams("dump_material needs a live Material handle/instance_id");
+
+            int limit = 200;
+            bool includeDefaults = false;
+            bool includeHidden = false;
+            if (request.Params is JsonElement j)
+            {
+                JsonElement tmp;
+                if (j.TryGetProperty("property_limit", out tmp)) { try { limit = Math.Max(1, tmp.GetInt32()); } catch { } }
+                if (j.TryGetProperty("include_defaults", out tmp)) { try { includeDefaults = tmp.GetBoolean(); } catch { } }
+                if (j.TryGetProperty("include_hidden", out tmp)) { try { includeHidden = tmp.GetBoolean(); } catch { } }
+            }
+
+            var material = instance as Material;
+            if (material == null)
+                return ToolError("NOT_A_MATERIAL",
+                    "Target is " + (type != null ? type.FullName : instance.GetType().FullName) +
+                    ", not UnityEngine.Material");
+            try
+            {
+                var data = MaterialDump.Dump(material, limit, includeDefaults, includeHidden);
+                data["target"] = target;
+                return new MCPResponse { Success = true, Data = data };
+            }
+            catch (Exception ex)
+            {
+                return ToolError("DUMP_MATERIAL_FAILED", ex.Message);
+            }
+        }
+
+        private MCPResponse HandleRenderObject(MCPRequest request)
+        {
+            Type type;
+            object instance;
+            bool isStatic;
+            string target;
+            MCPResponse error;
+            if (!ResolveTarget(request, out type, out instance, out isStatic, out target, out error))
+                return error;
+            if (isStatic || instance == null)
+                return InvalidParams("render_object needs a live handle/instance_id");
+
+            int width = 512;
+            int height = 512;
+            if (request.Params is JsonElement j)
+            {
+                JsonElement tmp;
+                if (j.TryGetProperty("width", out tmp)) { try { width = tmp.GetInt32(); } catch { } }
+                if (j.TryGetProperty("height", out tmp)) { try { height = tmp.GetInt32(); } catch { } }
+            }
+
+            var unityObject = instance as UnityEngine.Object;
+            if (unityObject == null)
+                return ToolError("NOT_UNITY_OBJECT",
+                    "Target is " + (type != null ? type.FullName : instance.GetType().FullName) +
+                    "; only scene objects can be rendered");
+            try
+            {
+                var data = ScreenshotCapture.RenderObject(unityObject, width, height, 0);
+                data["target"] = target;
+                return new MCPResponse { Success = true, Data = data };
+            }
+            catch (Exception ex)
+            {
+                return ToolError("RENDER_OBJECT_FAILED", ex.Message);
             }
         }
 

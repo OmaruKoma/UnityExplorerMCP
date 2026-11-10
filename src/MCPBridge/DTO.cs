@@ -214,6 +214,8 @@ namespace UnityExplorer.MCPBridge
         public string Value { get; set; }
         public bool IsStatic { get; set; }
         public bool CanWrite { get; set; }
+        /// <summary>Class that declares the member; differs from TypeName when inherited.</summary>
+        public string DeclaringType { get; set; }
     }
     
     public class MethodInfoItem
@@ -222,6 +224,8 @@ namespace UnityExplorer.MCPBridge
         public string ReturnType { get; set; }
         public List<ParameterInfoItem> Parameters { get; set; }
         public bool IsStatic { get; set; }
+        public string DeclaringType { get; set; }
+        public bool Inherited { get; set; }
     }
     
     public class ParameterInfoItem

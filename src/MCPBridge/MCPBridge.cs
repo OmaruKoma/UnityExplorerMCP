@@ -44,6 +44,7 @@ namespace UnityExplorer.MCPBridge
             "snapshot_object", "diff_snapshot", "undo_write",
             "start_instance_scan", "get_instance_scan", "search_values",
             "read_array", "decode_byte_array",
+            "dump_material", "render_object",
             "set_label", "remove_label", "list_labels",
             "start_method_trace", "stop_method_trace", "clear_method_trace",
             "list_method_traces", "get_method_trace", "build_call_graph",
@@ -303,6 +304,28 @@ namespace UnityExplorer.MCPBridge
             }
         }
         
+        /// <summary>
+        /// Target method name for invoke_* so the permission layer can tell a
+        /// GetFloat from a Destroy. Null for every other bridge method.
+        /// </summary>
+        private static string ReadInvokedMethodName(MCPRequest request)
+        {
+            try
+            {
+                if (request == null || request.Params == null) return null;
+                string method = (request.Method ?? "").ToLowerInvariant();
+                if (method != "invoke_method" && method != "invoke_static") return null;
+                if (request.Params is JsonElement j)
+                {
+                    JsonElement value;
+                    if (j.TryGetProperty("method", out value) || j.TryGetProperty("Method", out value))
+                        return value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+                }
+                return null;
+            }
+            catch { return null; }
+        }
+
         private string ProcessRequest(string requestBody)
         {
             try
@@ -315,7 +338,7 @@ namespace UnityExplorer.MCPBridge
                 
                 string method = request.Method != null ? request.Method.ToLower() : "";
 
-                string denied = BridgePermissions.Capability(method);
+                string denied = BridgePermissions.Capability(method, ReadInvokedMethodName(request));
                 if (denied != null)
                 {
                     return System.Text.Json.JsonSerializer.Serialize(new MCPResponse
@@ -327,7 +350,7 @@ namespace UnityExplorer.MCPBridge
                 }
 
                 MCPResponse response;
-                bool mutating = BridgePermissions.IsMutating(method);
+                bool mutating = BridgePermissions.IsMutating(method, ReadInvokedMethodName(request));
                 long startedTicks = mutating ? DateTime.UtcNow.Ticks : 0;
                 
                 switch (method)
@@ -363,6 +386,8 @@ namespace UnityExplorer.MCPBridge
                     case "search_values": response = HandleSearchValues(request); break;
                     case "read_array": response = HandleReadArray(request); break;
                     case "decode_byte_array": response = HandleDecodeByteArray(request); break;
+                    case "dump_material": response = HandleDumpMaterial(request); break;
+                    case "render_object": response = HandleRenderObject(request); break;
                     case "set_label": response = HandleSetLabel(request); break;
                     case "remove_label": response = HandleRemoveLabel(request); break;
                     case "list_labels": response = HandleListLabels(request); break;
@@ -634,119 +659,53 @@ components.Add(new ComponentInfo
             
             try
             {
-#if CPP
-                if (obj is Component comp)
+                // Managed reflection through the concrete type. This walks the
+                // base chain (Renderer/Component/...) and covers properties, which
+                // the old IL2CPP native walk did not: it started at the native
+                // klass and never followed il2cpp_class_get_parent, so a
+                // SkinnedMeshRenderer reported 0 fields / 0 properties and its
+                // materials/sharedMesh/enabled were simply absent.
+                var type = ConcreteType(obj);
+                info.TypeName = type != null ? type.FullName : obj.GetType().FullName;
+
+                int totalFields;
+                var entries = MemberTools.Enumerate(type, obj, true, null, 0, out totalFields);
+                foreach (var member in entries)
                 {
-                    IntPtr klass = IL2CPP.il2cpp_object_get_class(comp.Pointer);
-                    info.TypeName = Marshal.PtrToStringAnsi(IL2CPP.il2cpp_class_get_name(klass));
-                    
-                    IntPtr iter = IntPtr.Zero;
-                    IntPtr field;
-                    while ((field = IL2CPP.il2cpp_class_get_fields(klass, ref iter)) != IntPtr.Zero)
+                    var propertyInfo = member.Member as PropertyInfo;
+                    bool canWrite = propertyInfo != null
+                        ? propertyInfo.CanWrite
+                        : !((member.Member as FieldInfo)?.IsLiteral ?? false);
+                    var item = new MemberInfoItem
                     {
-                        try
-                        {
-                            string fieldName = Marshal.PtrToStringAnsi(IL2CPP.il2cpp_field_get_name(field));
-                            IntPtr fieldType = IL2CPP.il2cpp_field_get_type(field);
-                            string fieldTypeName = Marshal.PtrToStringAnsi(IL2CPP.il2cpp_type_get_name(fieldType));
-                            
-                            string value = "N/A";
-                            bool isStatic = (IL2CPP.il2cpp_field_get_flags(field) & 0x0010) != 0;
-                            
-                            // Only read values for safe types to avoid crashes
-                            bool isSafeType = fieldTypeName.StartsWith("System.") && 
-                                (fieldTypeName == "System.Int32" || fieldTypeName == "System.Single" || 
-                                 fieldTypeName == "System.Boolean" || fieldTypeName == "System.String" ||
-                                 fieldTypeName == "System.Int64" || fieldTypeName == "System.Double");
-                            
-                            if (isSafeType)
-                            {
-                                try
-                                {
-                                    IntPtr valuePtr = Marshal.AllocHGlobal(8);
-                                    unsafe
-                                    {
-                                        if (isStatic)
-                                            IL2CPP.il2cpp_field_static_get_value(field, (void*)valuePtr);
-                                        else
-                                            IL2CPP.il2cpp_field_get_value(comp.Pointer, field, (void*)valuePtr);
-                                    }
-                                    
-                                    value = FormatFieldValue(valuePtr, fieldTypeName);
-                                    Marshal.FreeHGlobal(valuePtr);
-                                }
-                                catch { }
-                            }
-                            
-                            info.Fields.Add(new MemberInfoItem
-                            {
-                                Name = fieldName,
-                                TypeName = fieldTypeName,
-                                Value = value,
-                                IsStatic = isStatic,
-                                CanWrite = true
-                            });
-                        }
-                        catch { }
-                    }
-                    
-                    iter = IntPtr.Zero;
-                    IntPtr method;
-                    while ((method = IL2CPP.il2cpp_class_get_methods(klass, ref iter)) != IntPtr.Zero)
-                    {
-                        try
-                        {
-                            string methodName = Marshal.PtrToStringAnsi(IL2CPP.il2cpp_method_get_name(method));
-                            if (string.IsNullOrEmpty(methodName) || methodName.StartsWith(".")) continue;
-                            
-                            uint paramCount = IL2CPP.il2cpp_method_get_param_count(method);
-                            var paramTypes = new List<string>();
-                            for (uint i = 0; i < paramCount; i++)
-                            {
-                                IntPtr paramType = IL2CPP.il2cpp_method_get_param(method, i);
-                                paramTypes.Add(Marshal.PtrToStringAnsi(IL2CPP.il2cpp_type_get_name(paramType)));
-                            }
-                            
-                            IntPtr returnType = IL2CPP.il2cpp_method_get_return_type(method);
-                            string returnTypeName = Marshal.PtrToStringAnsi(IL2CPP.il2cpp_type_get_name(returnType));
-                            
-                            info.Methods.Add(new MethodInfoItem
-                            {
-                                Name = methodName,
-                                ReturnType = returnTypeName,
-                                Parameters = paramTypes.Select(t => new ParameterInfoItem { Name = "", TypeName = t }).ToList(),
-                                IsStatic = false
-                            });
-                        }
-                        catch { }
-                    }
+                        Name = member.Name,
+                        TypeName = member.Type != null ? member.Type.FullName : null,
+                        Value = DescribeMemberValue(member.Value),
+                        IsStatic = member.IsStatic,
+                        CanWrite = canWrite,
+                        DeclaringType = member.DeclaringType
+                    };
+                    if (member.IsProperty) info.Properties.Add(item);
+                    else info.Fields.Add(item);
                 }
-#endif
-#if CPP
-                else
-#endif
+
+                // One pass over the whole base chain; inherited members are marked
+                // rather than dropped, which is the point of the fix.
+                foreach (var method in type.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static))
                 {
-                    // Mono backend (or non-Component on IL2CPP): managed reflection.
-                    var type = ConcreteType(obj);
-                    info.TypeName = type.FullName;
-                    BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static;
-                    
-                    foreach (var field in type.GetFields(flags))
+                    if (method.IsSpecialName || method.Name.StartsWith(".")) continue;
+                    var parameters = new List<ParameterInfoItem>();
+                    foreach (var p in method.GetParameters())
+                        parameters.Add(new ParameterInfoItem { Name = p.Name, TypeName = p.ParameterType.FullName });
+                    info.Methods.Add(new MethodInfoItem
                     {
-                        try
-                        {
-                            object value = field.GetValue(field.IsStatic ? null : obj);
-                            info.Fields.Add(new MemberInfoItem
-                            {
-                                Name = field.Name,
-                                TypeName = field.FieldType.FullName,
-                                Value = value != null ? value.ToString() : "null",
-                                IsStatic = field.IsStatic,
-                                CanWrite = !(field.IsLiteral && !field.IsInitOnly)
-                            });
-                        }
-                        catch { }
-                    }
+                        Name = method.Name,
+                        ReturnType = method.ReturnType.FullName,
+                        Parameters = parameters,
+                        IsStatic = method.IsStatic,
+                        DeclaringType = method.DeclaringType != null ? method.DeclaringType.FullName : null,
+                        Inherited = method.DeclaringType != type
+                    });
                 }
             }
             catch (Exception ex)
@@ -821,18 +780,62 @@ components.Add(new ComponentInfo
             string error;
             if (!MemberTools.TryRead(type, obj, fieldName, out value, out valueType, out isStatic, out isProperty, out error))
                 return new MCPResponse { Success = false, Error = error };
-            return new MCPResponse
+            var response = new Dictionary<string, object>
             {
-                Success = true,
-                Data = new FieldValueResponse
-                {
-                    FieldName = fieldName,
-                    TypeName = valueType != null ? valueType.FullName : null,
-                    Value = value != null ? value.ToString() : "null"
-                }
+                { "field", fieldName },
+                { "type", valueType != null ? valueType.FullName : null }
             };
+            AttachValue(response, value, valueType, request, "value");
+            return new MCPResponse { Success = true, Data = response };
         }
         
+        /// <summary>
+        /// Compact text for inspect listings: scalars as-is, arrays as a count
+        /// plus the first few element previews, references by name. Keeps inspect
+        /// readable without a follow-up call per member.
+        /// </summary>
+        private static string DescribeMemberValue(object value)
+        {
+            if (value == null) return "null";
+            try
+            {
+                if (value is string s) return s;
+                var unityObj = value as UnityEngine.Object;
+                if (unityObj != null)
+                    return "\"" + unityObj.name + "\" (" + unityObj.GetType().Name + ")";
+                var list = value as System.Collections.IList;
+                if (list != null)
+                {
+                    var previews = new List<string>();
+                    int take = Math.Min(list.Count, 3);
+                    for (int i = 0; i < take; i++)
+                    {
+                        object item;
+                        try { item = list[i]; } catch { item = null; }
+                        previews.Add(BriefPreview(item));
+                    }
+                    string joined = string.Join(", ", previews.ToArray());
+                    return "[" + list.Count + "] " + (list.Count > 0 ? "{" + joined + (list.Count > take ? ", ..." : "") + "}" : "");
+                }
+                string text = value.ToString();
+                return text != null && text.Length > 200 ? text.Substring(0, 200) + "..." : text;
+            }
+            catch { return "<unprintable>"; }
+        }
+
+        private static string BriefPreview(object item)
+        {
+            if (item == null) return "null";
+            try
+            {
+                var unityObj = item as UnityEngine.Object;
+                if (unityObj != null) return "\"" + unityObj.name + "\"";
+                string text = item.ToString();
+                return text != null && text.Length > 60 ? text.Substring(0, 60) + "..." : text;
+            }
+            catch { return "?"; }
+        }
+
         private MCPResponse HandleSetField(MCPRequest request)
         {
             MCPResponse stale = ValidateWriteHandle(request);
@@ -904,9 +907,83 @@ components.Add(new ComponentInfo
             {
                 var getter = prop.GetGetMethod(true);
                 object value = getter != null ? prop.GetValue(getter.IsStatic ? null : obj, null) : null;
-                return new MCPResponse { Success = true, Data = new PropertyValueResponse { PropertyName = prop.Name, TypeName = prop.PropertyType.FullName, Value = value != null ? value.ToString() : "null" } };
+                var response = new Dictionary<string, object>
+                {
+                    { "property", prop.Name },
+                    { "type", prop.PropertyType.FullName },
+                    { "declaring_type", prop.DeclaringType != null ? prop.DeclaringType.FullName : null }
+                };
+                AttachValue(response, value, prop.PropertyType, request, "value");
+                return new MCPResponse { Success = true, Data = response };
             }
             catch (Exception ex) { return new MCPResponse { Success = false, Error = ex.Message }; }
+        }
+
+        /// <summary>
+        /// Writes the member value in both forms the caller needs: a compact
+        /// "value" text plus a machine-usable "detail" object. Arrays are inlined
+        /// up to preview_limit (default 8) instead of collapsing to an
+        /// "Il2CppReferenceArray 1[Material]" string, and reference elements carry
+        /// their name/handle, so reading materials or shaderKeywords takes one call.
+        /// </summary>
+        private static void AttachValue(Dictionary<string, object> target, object value,
+            Type declaredType, MCPRequest request, string key)
+        {
+            target[key] = value != null ? DescribeMemberValue(value) : "null";
+            if (value == null) return;
+            try
+            {
+                int previewLimit = 8;
+                if (request.Params is JsonElement j)
+                {
+                    JsonElement tmp;
+                    if (j.TryGetProperty("preview_limit", out tmp)) { try { previewLimit = Math.Max(0, tmp.GetInt32()); } catch { } }
+                }
+                object detail = ValueSerializer.Serialize(InlinePreview(value, previewLimit), "hex");
+                target["detail"] = detail;
+            }
+            catch (Exception ex)
+            {
+                target["detail_error"] = ex.Message;
+            }
+        }
+
+        /// <summary>
+        /// Copies an array/list to a plain managed array so ValueSerializer emits
+        /// real JSON items (it would otherwise report the interop type wrapper).
+        /// </summary>
+        private static object InlinePreview(object value, int take)
+        {
+            if (take <= 0) return value;
+            try
+            {
+                var list = value as System.Collections.IList;
+                if (list != null)
+                {
+                    int count = Math.Min(list.Count, take);
+                    var items = new List<object>(count);
+                    for (int i = 0; i < count; i++)
+                    {
+                        object item;
+                        try { item = list[i]; } catch { item = null; }
+                        var unityObj = item as UnityEngine.Object;
+                        if (unityObj != null)
+                        {
+                            items.Add(new Dictionary<string, object>
+                            {
+                                { "name", unityObj.name },
+                                { "type", unityObj.GetType().Name },
+                                { "instance_id", unityObj.GetInstanceID() },
+                                { "handle", Handle.Format(unityObj.GetInstanceID()) }
+                            });
+                        }
+                        else items.Add(item);
+                    }
+                    return items;
+                }
+            }
+            catch { }
+            return value;
         }
         
         private MCPResponse HandleSetProperty(MCPRequest request)

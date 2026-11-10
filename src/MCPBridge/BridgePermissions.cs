@@ -21,6 +21,34 @@ namespace UnityExplorer.MCPBridge
             "start_method_trace", "stop_method_trace", "clear_method_trace"
         };
 
+        /// <summary>
+        /// Getter-shaped method names. A batch of material reads is all GetFloat/
+        /// GetColor/GetTexture/GetShaderKeywordCount calls; refusing them because
+        /// they travel through invoke_method costs one round-trip per property.
+        /// </summary>
+        private static readonly string[] ReadOnlyPrefixes =
+        {
+            "get", "is", "has", "can", "find", "contains", "count", "peek",
+            "toarray", "tolist", "tostring", "lookup", "resolve", "query",
+            "read", "enumerate", "calculate", "compute", "check"
+        };
+
+        /// <summary>Names that are reads despite not matching a prefix.</summary>
+        private static readonly string[] ReadOnlyExact =
+        {
+            "length", "count", "name", "tostring", "clone", "equals"
+        };
+
+        public static bool IsReadOnlyMethod(string methodName)
+        {
+            if (string.IsNullOrEmpty(methodName)) return false;
+            string m = methodName.Trim().ToLowerInvariant();
+            if (Array.IndexOf(ReadOnlyExact, m) >= 0) return true;
+            foreach (string prefix in ReadOnlyPrefixes)
+                if (m.StartsWith(prefix, StringComparison.Ordinal)) return true;
+            return false;
+        }
+
         public static bool IsAllowed(string method)
         {
             return Capability(method) == null;
@@ -29,9 +57,23 @@ namespace UnityExplorer.MCPBridge
         /// <summary>Returns the denied capability name, or null when allowed.</summary>
         public static string Capability(string method)
         {
+            return Capability(method, null);
+        }
+
+        /// <summary>
+        /// Read-only invoke is a first-class case: in the read-only preset a
+        /// GetFloat/GetColor/GetTexture call stays allowed while a setter or a
+        /// Destroy is still refused.
+        /// </summary>
+        public static string Capability(string method, string invokedMethod)
+        {
             string m = (method ?? "").ToLowerInvariant();
             if (Array.IndexOf(WriteMethods, m) >= 0 && !BridgeConfig.AllowWrite) return "write";
-            if (Array.IndexOf(InvokeMethods, m) >= 0 && !BridgeConfig.AllowInvoke) return "invoke";
+            if (Array.IndexOf(InvokeMethods, m) >= 0 && !BridgeConfig.AllowInvoke)
+            {
+                if (BridgeConfig.AllowInvokeReadOnly && IsReadOnlyMethod(invokedMethod)) return null;
+                return "invoke";
+            }
             if (m == "execute_csharp" && !BridgeConfig.AllowExecute) return "execute";
             if (Array.IndexOf(TraceMethods, m) >= 0 && !BridgeConfig.AllowTrace) return "trace";
             return null;
@@ -39,11 +81,17 @@ namespace UnityExplorer.MCPBridge
 
         public static bool IsMutating(string method)
         {
+            return IsMutating(method, null);
+        }
+
+        public static bool IsMutating(string method, string invokedMethod)
+        {
             string m = (method ?? "").ToLowerInvariant();
-            return Array.IndexOf(WriteMethods, m) >= 0
-                || Array.IndexOf(InvokeMethods, m) >= 0
-                || Array.IndexOf(TraceMethods, m) >= 0
-                || m == "execute_csharp";
+            if (Array.IndexOf(WriteMethods, m) >= 0) return true;
+            if (Array.IndexOf(TraceMethods, m) >= 0) return true;
+            if (m == "execute_csharp") return true;
+            if (Array.IndexOf(InvokeMethods, m) >= 0) return !IsReadOnlyMethod(invokedMethod);
+            return false;
         }
 
         public static Dictionary<string, object> DeniedData(string capability)
