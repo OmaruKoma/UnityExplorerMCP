@@ -729,7 +729,7 @@ export const TOOL_DEFS: ToolDef[] = [
   ),
   tool(
     "unity_render_object",
-    "Render one object offscreen to PNG with a throwaway camera. Works while the game is paused or covered by UI, unlike capture_screenshot.",
+    "Render one object offscreen to PNG with a throwaway camera. Works while the game is paused or covered by UI, unlike capture_screenshot. Handles inactive objects via a mesh proxy (see proxy_meshes). Does not draw UI meshes, skinned bind pose only, and MaterialPropertyBlock overrides are not copied.",
     schema({
       ...instanceId,
       ...handle,

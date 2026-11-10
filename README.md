@@ -359,6 +359,22 @@ permissions, features, limits and marshalling support for the game you are attac
 | `unity_capture_screenshot` | Current frame as PNG image content; optional file copy |
 | `unity_render_object` | Render one object offscreen to PNG; works while paused or UI-covered |
 
+`unity_render_object` frames the object's bounds with a throwaway camera and renders to a
+RenderTexture, so the result does not depend on what the game last composited (screen capture
+returns the last frame, which is why it comes back grey while paused). Inactive objects are
+handled by copying their meshes onto a temporary object, since an inactive renderer draws
+nothing and `SetActive` cannot activate a child under an inactive parent. Three limits are
+worth knowing before you rely on the image:
+
+- **UI meshes render empty.** `Image`, `Text` and `ParticleSystem` draw through a Canvas; with no
+  Canvas in the offscreen camera the material stays invisible. Use this for 3D geometry.
+- **Skinned meshes show the bind pose**, not the current animation state, when the proxy path is
+  used. The mesh is copied, not evaluated.
+- **Material property blocks are not copied.** `MaterialPropertyBlock` overrides on the live
+  renderer do not reach the proxy.
+
+Responses carry `proxy_meshes`; a non-zero value means you are looking at a copy.
+
 **Runtime**
 
 | Tool | Purpose |

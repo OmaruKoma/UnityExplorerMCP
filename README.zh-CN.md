@@ -350,6 +350,18 @@ cd UnityExplorerMCP
 | `unity_capture_screenshot` | 当前帧 PNG image content；可另存文件 |
 | `unity_render_object` | 单对象离屏渲染成 PNG；暂停或被 UI 遮挡时仍可用 |
 
+`unity_render_object` 用一次性相机按对象包围盒取景并渲染到 RenderTexture，所以结果不取决于
+游戏最后合成的那一帧（`capture_screenshot` 拿的正是那一帧，暂停时必然是灰的）。未激活对象
+会把网格复制到临时对象上渲染——未激活渲染器不绘制，而 `SetActive` 在非激活父级下也无法
+让子对象激活。依赖这张图前，先知道三个限制：
+
+- **UI 网格渲染为空。** `Image`、`Text`、`ParticleSystem` 都经 Canvas 绘制，离屏相机下没有
+  Canvas，材质不可见。这个工具是给 3D 几何体用的。
+- **蒙皮网格显示绑定姿态**，不是当前动画姿态——走代理路径时复制的是网格，不做蒙皮求值。
+- **材质属性块不会被复制。** 实际渲染器上的 `MaterialPropertyBlock` 覆盖不会带到代理对象。
+
+返回体里的 `proxy_meshes` 非零即表示你看到的是副本。
+
 **运行时**
 
 | 工具 | 用途 |
