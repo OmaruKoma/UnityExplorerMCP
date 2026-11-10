@@ -62,7 +62,9 @@ namespace UnityExplorer.MCPBridge
                 while (png.Length > maxBytes && scale < 4)
                 {
                     scale++;
-                    Texture2D smaller = Downscale(texture, scale);
+                    // Halve the current texture, not the original: dividing the
+                    // already-shrunk texture by 1<<scale compounds and skips sizes.
+                    Texture2D smaller = Downscale(texture, 1);
                     if (smaller == null) break;
                     UnityEngine.Object.Destroy(texture);
                     texture = smaller;
@@ -226,7 +228,7 @@ namespace UnityExplorer.MCPBridge
 
             // CinemachineBrain rewrites the camera transform in LateUpdate, so the
             // framing above is gone one frame later unless the driver is paused.
-            List<Behaviour> paused = restore ? null : PauseCameraDrivers(camera);
+            List<Component> paused = restore ? null : PauseCameraDrivers(camera);
             List<string> reenabled = null;
             if (restore) reenabled = ResumeCameraDrivers();
 
@@ -274,26 +276,28 @@ namespace UnityExplorer.MCPBridge
             return result;
         }
 
-        private static readonly List<Behaviour> _pausedDrivers = new List<Behaviour>();
+        private static readonly List<Component> _pausedDrivers = new List<Component>();
 
         /// <summary>
         /// Disables Cinemachine-style behaviours on the camera so a written
-        /// transform survives past LateUpdate.
+        /// transform survives past LateUpdate. Enumerated as Component (generic
+        /// Behaviour enumeration returns nothing under IL2CPP) with enabled read
+        /// through reflection.
         /// </summary>
-        private static List<Behaviour> PauseCameraDrivers(Camera camera)
+        private static List<Component> PauseCameraDrivers(Camera camera)
         {
-            var paused = new List<Behaviour>();
+            var paused = new List<Component>();
             try
             {
-                foreach (var behaviour in camera.gameObject.GetComponents<Behaviour>())
+                foreach (Component component in camera.gameObject.GetComponents<Component>())
                 {
-                    if (behaviour == null || !behaviour.enabled) continue;
-                    string typeName = behaviour.GetType().Name;
+                    if (component == null) continue;
+                    string typeName = component.GetType().Name;
                     if (typeName.IndexOf("Cinemachine", StringComparison.OrdinalIgnoreCase) < 0)
                         continue;
-                    behaviour.enabled = false;
-                    paused.Add(behaviour);
-                    if (!_pausedDrivers.Contains(behaviour)) _pausedDrivers.Add(behaviour);
+                    if (!SetEnabled(component, false)) continue;
+                    paused.Add(component);
+                    if (!_pausedDrivers.Contains(component)) _pausedDrivers.Add(component);
                 }
             }
             catch { }
@@ -305,12 +309,11 @@ namespace UnityExplorer.MCPBridge
             var resumed = new List<string>();
             for (int i = _pausedDrivers.Count - 1; i >= 0; i--)
             {
-                Behaviour behaviour = _pausedDrivers[i];
+                Component component = _pausedDrivers[i];
                 try
                 {
-                    if (behaviour == null) continue;
-                    behaviour.enabled = true;
-                    resumed.Add(behaviour.GetType().Name);
+                    if (component != null && SetEnabled(component, true))
+                        resumed.Add(component.GetType().Name);
                 }
                 catch { }
                 _pausedDrivers.RemoveAt(i);
@@ -318,12 +321,25 @@ namespace UnityExplorer.MCPBridge
             return resumed;
         }
 
-        private static List<string> DriverNames(List<Behaviour> behaviours)
+        private static bool SetEnabled(Component component, bool enabled)
+        {
+            try
+            {
+                PropertyInfo property = component.GetType().GetProperty("enabled",
+                    BindingFlags.Public | BindingFlags.Instance);
+                if (property == null || !property.CanWrite) return false;
+                property.SetValue(component, enabled, null);
+                return true;
+            }
+            catch { return false; }
+        }
+
+        private static List<string> DriverNames(List<Component> components)
         {
             var names = new List<string>();
-            foreach (var behaviour in behaviours)
+            foreach (var component in components)
             {
-                try { names.Add(behaviour.GetType().Name); }
+                try { names.Add(component.GetType().Name); }
                 catch { names.Add("?"); }
             }
             return names;
