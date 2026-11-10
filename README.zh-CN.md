@@ -50,7 +50,8 @@
 
 [UnityExplorer](https://github.com/sinai-dev/UnityExplorer) 是同一件事的手动游戏内 UI。
 本项目是面向 Agent 的 API 层：运行时**不需要**加载 UnityExplorer，并自带同一套 Mono.CSharp
-引擎（`mcs.dll`）用于执行 C#。
+引擎（`mcs.dll`）用于执行 C#。开发与真机测试以维护中的
+[yukieiji/UnityExplorer](https://github.com/yukieiji/UnityExplorer) 分支为准。
 
 ## 快速开始
 
@@ -517,8 +518,25 @@ node verify.js                   # 仓库完整性
 
 ## 致谢
 
-- [UnityExplorer](https://github.com/sinai-dev/UnityExplorer) —— 运行时检视工具，也是本桥
-  所模仿的 C# Console 行为的参照。UnityExplorer 采用 GPL-3.0，其代码不在本仓库中。
+本项目建立在此前的 Unity 运行时检视工作之上。
+
+**运行时基础**
+
+- [UnityExplorer](https://github.com/sinai-dev/UnityExplorer) —— 原版游戏内检视器。本桥模仿其
+  C# Console 行为，并使用同一套 Mono.CSharp 引擎。UnityExplorer 采用 GPL-3.0，其代码不在本仓库中。
+- [yukieiji/UnityExplorer](https://github.com/yukieiji/UnityExplorer) —— 本项目实际使用与真机测试的
+  维护分支，包含更新的 IL2CPP / interop 支持。
+
+**对比项目提供的思路**（仅设计评审参考，未复制代码）
+
+- [Jadis0x/UnityRuntimeExplorer](https://github.com/Jadis0x/UnityRuntimeExplorer) —— 基于 URKit 的
+  IL2CPP/Mono 实时检视器并集成 MCP。其以工具为中心的运行时模型启发了本项目的句柄化对象工作流，
+  以及“游戏内桥 + 外部 Server”的分层。
+- [snowyegret23/UnityInfoMCP](https://github.com/snowyegret23/UnityInfoMCP) —— 外部 MCP Server 加
+  游戏内桥的检视 / 本地化工作流。其面向 LLM 的紧凑结果塑形启发了本项目的表格化、分页与截断策略。
+
+**依赖**
+
 - **Mono.CSharp**（`mcs.dll`）—— MIT，用于游戏内 C# 执行。
 - [BepInEx](https://github.com/BepInEx/BepInEx) —— Mod 加载器集成。
 - [Model Context Protocol](https://modelcontextprotocol.io) —— Server 传输层 SDK。

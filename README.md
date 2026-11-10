@@ -51,6 +51,8 @@ English | [简体中文](README.zh-CN.md)
 [UnityExplorer](https://github.com/sinai-dev/UnityExplorer) is the manual, in-game UI for the
 same job. This project is the agent-facing API layer: it does not require UnityExplorer to be
 loaded at runtime, and ships the same Mono.CSharp engine (`mcs.dll`) for C# execution.
+Development and testing target the maintained
+[yukieiji/UnityExplorer](https://github.com/yukieiji/UnityExplorer) fork.
 
 ## Quick start
 
@@ -533,9 +535,27 @@ Outputs land in `dist/il2cpp`, `dist/mono`, `dist/mono-bepinex5`.
 
 ## Acknowledgements
 
-- [UnityExplorer](https://github.com/sinai-dev/UnityExplorer) — runtime inspection toolkit and
-  reference for the C# console behavior this bridge mirrors. UnityExplorer is GPL-3.0 and is not
-  part of this codebase.
+This project stands on the Unity runtime-inspection work that came before it.
+
+**Runtime foundation**
+
+- [UnityExplorer](https://github.com/sinai-dev/UnityExplorer) — the original in-game inspector.
+  This bridge mirrors its C# console behavior and uses the same Mono.CSharp engine. UnityExplorer
+  is GPL-3.0 and is not part of this codebase.
+- [yukieiji/UnityExplorer](https://github.com/yukieiji/UnityExplorer) — the maintained fork this
+  project is developed and tested against, with updated IL2CPP/interop support.
+
+**Ideas from peer projects** (design review only; no code copied)
+
+- [Jadis0x/UnityRuntimeExplorer](https://github.com/Jadis0x/UnityRuntimeExplorer) — a live
+  IL2CPP/Mono inspector with MCP integration, built on URKit. Its tool-centric runtime model
+  informed our handle-based object workflow and the in-game bridge / external server split.
+- [snowyegret23/UnityInfoMCP](https://github.com/snowyegret23/UnityInfoMCP) — an external MCP
+  server plus in-game bridge for inspection and localization workflows. Its compact, LLM-sized
+  result shaping informed our tables, paging and truncation strategy.
+
+**Dependencies**
+
 - **Mono.CSharp** (`mcs.dll`) — MIT, bundled for in-game C# execution.
 - [BepInEx](https://github.com/BepInEx/BepInEx) — mod loader integration.
 - [Model Context Protocol](https://modelcontextprotocol.io) SDK for the server transport.
