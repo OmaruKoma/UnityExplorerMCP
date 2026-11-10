@@ -42,7 +42,7 @@ namespace UnityExplorer.MCPBridge
                         { "loader", "BepInEx" },
                         { "unity_version", SafeUnityVersion() },
                         { "session_id", SafeSession() },
-                        { "bridge_version", "1.3.0" },
+                        { "bridge_version", "1.3.1" },
                         { "started_at", DateTime.UtcNow.ToString("o") }
                     };
                     string json = JsonSerializer.Serialize(record);

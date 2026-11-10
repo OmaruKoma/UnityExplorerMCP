@@ -13,7 +13,7 @@ import { BATCH_ALLOWED, TOOL_DEFS, TOOL_NAMES } from "./tools.js";
 import { renderResult, RESULT_BUDGET } from "./compaction.js";
 import { BridgeManager } from "./bridge.js";
 
-const VERSION = "1.3.0";
+const VERSION = "1.3.1";
 const BATCH_BUDGET = positiveInt(process.env.UNITY_BATCH_BUDGET, 28_000);
 const MAX_TOOL_TEXT = positiveInt(process.env.UNITY_MCP_MAX_BYTES, 1_500_000);
 const connectors = new BridgeManager();

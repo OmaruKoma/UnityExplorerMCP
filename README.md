@@ -198,13 +198,13 @@ UnityExplorer itself is **not** required at runtime.
 
 ### Option A — prebuilt (recommended)
 
-1. Download the bridge for your loader from [Releases](https://github.com/OmaruKoma/UnityExplorerMCP/releases) (assets are `1.3.0` for this version):
+1. Download the bridge for your loader from [Releases](https://github.com/OmaruKoma/UnityExplorerMCP/releases) (assets are `1.3.1` for this version):
 
    | Asset | For |
    |---|---|
-   | `UnityExplorerMCP-1.3.0-IL2CPP.zip` | IL2CPP games on BepInEx 6 |
-   | `UnityExplorerMCP-1.3.0-Mono-BepInEx6.zip` | Mono games on BepInEx 6 (Unity Mono) |
-   | `UnityExplorerMCP-1.3.0-Mono-BepInEx5.zip` | Mono games on BepInEx 5 |
+   | `UnityExplorerMCP-1.3.1-IL2CPP.zip` | IL2CPP games on BepInEx 6 |
+   | `UnityExplorerMCP-1.3.1-Mono-BepInEx6.zip` | Mono games on BepInEx 6 (Unity Mono) |
+   | `UnityExplorerMCP-1.3.1-Mono-BepInEx5.zip` | Mono games on BepInEx 5 |
 
 2. Extract the zip into `<GAME_ROOT>/BepInEx/plugins/`. It contains the bridge DLL and `mcs.dll`
    (required for `unity_execute_csharp`), which must stay side by side.
@@ -215,11 +215,11 @@ UnityExplorer itself is **not** required at runtime.
    MCP Bridge plugin loaded (IL2CPP backend)
    ```
 
-4. Set up the server from `unity-explorer-mcp-server-1.3.0.zip`:
+4. Set up the server from `unity-explorer-mcp-server-1.3.1.zip`:
 
    ```bash
-   unzip unity-explorer-mcp-server-1.3.0.zip
-   cd unity-explorer-mcp-server-1.3.0
+   unzip unity-explorer-mcp-server-1.3.1.zip
+   cd unity-explorer-mcp-server-1.3.1
    npm ci --omit=dev
    node dist/server.js        # speaks MCP on stdio
    ```

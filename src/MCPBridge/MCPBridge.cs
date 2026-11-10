@@ -434,7 +434,7 @@ namespace UnityExplorer.MCPBridge
                 {
                     Status = "ok",
                     UnityVersion = Application.unityVersion,
-                    BridgeVersion = "1.3.0",
+                    BridgeVersion = "1.3.1",
                     SessionId = SessionId,
                     Pid = SafePid(),
                     Port = Port,
@@ -1452,7 +1452,7 @@ components.Add(new ComponentInfo
                     { "backend", BridgeConfig.Backend },
                     { "loader", "BepInEx" },
                     { "bepinex_version", bepinExVersion ?? "unknown" },
-                    { "bridge_version", "1.3.0" },
+                    { "bridge_version", "1.3.1" },
                     { "unity_version", Application.unityVersion },
                     { "session_id", SessionId },
                     { "pid", SafePid() },

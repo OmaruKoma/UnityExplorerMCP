@@ -193,9 +193,9 @@ BepInEx 6 Mono 与主干同源编译，但暂无真机运行时；如有运行�
 
    | 资源 | 适用 |
    |---|---|
-   | `UnityExplorerMCP-1.3.0-IL2CPP.zip` | BepInEx 6 + IL2CPP 游戏 |
-   | `UnityExplorerMCP-1.3.0-Mono-BepInEx6.zip` | BepInEx 6 + Mono（Unity Mono）游戏 |
-   | `UnityExplorerMCP-1.3.0-Mono-BepInEx5.zip` | BepInEx 5 + Mono 游戏 |
+   | `UnityExplorerMCP-1.3.1-IL2CPP.zip` | BepInEx 6 + IL2CPP 游戏 |
+   | `UnityExplorerMCP-1.3.1-Mono-BepInEx6.zip` | BepInEx 6 + Mono（Unity Mono）游戏 |
+   | `UnityExplorerMCP-1.3.1-Mono-BepInEx5.zip` | BepInEx 5 + Mono 游戏 |
 
 2. 解压到 `<GAME_ROOT>/BepInEx/plugins/`。压缩包内是桥 DLL 与 `mcs.dll`
    （`unity_execute_csharp` 必需），两者必须放在同一目录。
@@ -206,11 +206,11 @@ BepInEx 6 Mono 与主干同源编译，但暂无真机运行时；如有运行�
    MCP Bridge plugin loaded (IL2CPP backend)
    ```
 
-4. 用 `unity-explorer-mcp-server-1.3.0.zip` 部署 Server：
+4. 用 `unity-explorer-mcp-server-1.3.1.zip` 部署 Server：
 
    ```bash
-   unzip unity-explorer-mcp-server-1.3.0.zip
-   cd unity-explorer-mcp-server-1.3.0
+   unzip unity-explorer-mcp-server-1.3.1.zip
+   cd unity-explorer-mcp-server-1.3.1
    npm ci --omit=dev
    node dist/server.js        # 以 stdio 提供 MCP 服务
    ```
