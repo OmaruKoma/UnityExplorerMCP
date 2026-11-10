@@ -847,6 +847,7 @@ namespace UnityExplorer.MCPBridge
             float offsetY = 0f;
             bool lookAt = true;
             bool restore = false;
+            bool reverse = false;
             if (request.Params is JsonElement p)
             {
                 JsonElement tmp;
@@ -867,6 +868,7 @@ namespace UnityExplorer.MCPBridge
                 if (p.TryGetProperty("offset_y", out tmp)) { try { offsetY = (float)tmp.GetDouble(); } catch { } }
                 if (p.TryGetProperty("look_at", out tmp)) { try { lookAt = tmp.GetBoolean(); } catch { } }
                 if (p.TryGetProperty("restore", out tmp)) { try { restore = tmp.GetBoolean(); } catch { } }
+                if (p.TryGetProperty("reverse", out tmp)) { try { reverse = tmp.GetBoolean(); } catch { } }
             }
             if (targetId == 0)
                 return InvalidParams("frame_camera needs target / target_handle (the object to point at)");
@@ -881,7 +883,7 @@ namespace UnityExplorer.MCPBridge
                 {
                     Success = true,
                     Data = ScreenshotCapture.FrameCamera(camera, target, distanceScale,
-                        offsetX, offsetY, lookAt, restore)
+                        offsetX, offsetY, lookAt, restore, reverse)
                 };
             }
             catch (Exception ex)

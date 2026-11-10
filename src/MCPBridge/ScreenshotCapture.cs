@@ -180,7 +180,7 @@ namespace UnityExplorer.MCPBridge
         /// </summary>
         public static Dictionary<string, object> FrameCamera(Camera camera,
             UnityEngine.Object target, float distanceScale, float offsetX, float offsetY,
-            bool lookAt, bool restore)
+            bool lookAt, bool restore, bool reverse)
         {
             if (camera == null) throw new Exception("Camera is null");
             if (target == null) throw new Exception("Target is null");
@@ -209,6 +209,9 @@ namespace UnityExplorer.MCPBridge
             catch { }
             if (forward.sqrMagnitude < 0.0001f) forward = Vector3.back;
             forward.Normalize();
+            // Which side of the target is its front is a modelling convention; reverse
+            // flips the camera to the opposite side without moving the target.
+            if (reverse) forward = -forward;
             Vector3 up = Vector3.up;
 
             Vector3 position = bounds.center + forward * distance

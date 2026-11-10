@@ -366,6 +366,7 @@ const BRIDGE_ROUTES: Record<
       offset_y: a?.offset_y,
       look_at: a?.look_at,
       restore: a?.restore,
+      reverse: a?.reverse,
     },
   }),
 };

@@ -758,6 +758,10 @@ export const TOOL_DEFS: ToolDef[] = [
       offset_x: { type: "number", description: "Sideways offset in target radii" },
       offset_y: { type: "number", description: "Vertical offset in target radii" },
       look_at: { type: "boolean", description: "Aim at the target centre (default true)" },
+      reverse: {
+        type: "boolean",
+        description: "Frame from the opposite side (use when the default view shows the target's back)",
+      },
       restore: {
         type: "boolean",
         description: "Restore the camera transform immediately after framing (default false)",
