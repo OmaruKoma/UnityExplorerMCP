@@ -108,6 +108,21 @@ namespace UnityExplorer.MCPBridge
 
             // Arrays / lists inline as JSON arrays (capped) so reflection
             // listings and similar snippets come back usable, not as handles.
+            if (value is System.Collections.IDictionary map)
+            {
+                // Bridge-built preview objects are dictionaries; without this they
+                // fell through to the registry-handle branch and surfaced as
+                // "Dictionary`2[String,Object]" with an instance_id.
+                var entries = new Dictionary<string, object>();
+                foreach (System.Collections.DictionaryEntry entry in map)
+                {
+                    string key = entry.Key != null ? entry.Key.ToString() : "";
+                    try { entries[key] = Serialize(entry.Value, encoding, trackReferences); }
+                    catch { entries[key] = "<unserializable>"; }
+                }
+                return entries;
+            }
+
             if (value is System.Collections.IList list)
             {
                 int total = list.Count;

@@ -4,6 +4,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Reflection;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 namespace UnityExplorer.MCPBridge
 {
@@ -110,6 +111,16 @@ namespace UnityExplorer.MCPBridge
             if (maxBytes <= 0) maxBytes = BridgeConfig.MaxScreenshotBytes;
 
             Bounds bounds = ComputeBounds(target);
+
+            // An inactive renderer draws nothing, and SetActive cannot force a
+            // child active under an inactive parent, so activation is not an
+            // option: the object stays unusable. Instead the meshes are copied
+            // onto a temporary active GameObject and the camera renders that.
+            // The scene is left untouched.
+            bool needsProxy = !IsRenderable(target);
+            Transform proxyRoot = null;
+            int proxyMeshCount = 0;
+
             GameObject cameraObject = null;
             Camera camera = null;
             RenderTexture render = null;
@@ -117,12 +128,27 @@ namespace UnityExplorer.MCPBridge
             RenderTexture previousActive = RenderTexture.active;
             try
             {
+                if (needsProxy)
+                    proxyRoot = BuildProxy(target, bounds, out proxyMeshCount);
+
                 cameraObject = new GameObject("MCP Render Camera");
                 camera = cameraObject.AddComponent<Camera>();
+                // Place the camera in the object's scene so it sees that scene's
+                // lights; a camera in another scene renders an unlit view.
+                try
+                {
+                    GameObject targetGo = target as GameObject
+                        ?? (target as Component)?.gameObject;
+                    if (targetGo != null && targetGo.scene.IsValid())
+                        SceneManager.MoveGameObjectToScene(cameraObject, targetGo.scene);
+                }
+                catch { }
                 camera.enabled = false;
                 camera.clearFlags = CameraClearFlags.SolidColor;
                 camera.backgroundColor = new Color(0f, 0f, 0f, 0f);
-                camera.cullingMask = ~0;
+                camera.cullingMask = needsProxy && proxyRoot != null
+                    ? (1 << proxyRoot.gameObject.layer)
+                    : ~0;
                 camera.fieldOfView = 35f;
 
                 // Frame the whole object: radius from bounds, distance from the FOV.
@@ -160,6 +186,17 @@ namespace UnityExplorer.MCPBridge
                         } },
                     { "base64", png.Length <= maxBytes ? Convert.ToBase64String(png) : null }
                 };
+                if (needsProxy)
+                {
+                    // Say so explicitly: the caller is looking at a copy, not at
+                    // the live object, and some effects (skinning pose, UI masks)
+                    // will not match a real screenshot.
+                    result["proxy_meshes"] = proxyMeshCount;
+                    result["note"] = proxyMeshCount > 0
+                        ? "Target is inactive; rendered its meshes through a temporary proxy. " +
+                          "Skinned pose and material overrides may differ from the live object."
+                        : "Target is inactive and exposes no meshes; image may be empty.";
+                }
                 if (png.Length > maxBytes)
                     result["note"] = "PNG exceeds max bytes; lower width/height or raise MCP_MAX_SCREENSHOT_BYTES";
                 return result;
@@ -174,6 +211,79 @@ namespace UnityExplorer.MCPBridge
                 if (texture != null) UnityEngine.Object.Destroy(texture);
                 if (render != null) RenderTexture.ReleaseTemporary(render);
                 if (cameraObject != null) UnityEngine.Object.Destroy(cameraObject);
+                if (proxyRoot != null) UnityEngine.Object.Destroy(proxyRoot.gameObject);
+            }
+        }
+
+        /// <summary>
+        /// True when the object would actually be drawn: active in hierarchy and,
+        /// for renderers/behaviours, enabled.
+        /// </summary>
+        private static bool IsRenderable(UnityEngine.Object target)
+        {
+            try
+            {
+                if (target is GameObject go) return go.activeInHierarchy;
+                var behaviour = target as Behaviour;
+                if (behaviour != null) return behaviour.isActiveAndEnabled;
+                var renderer = target as Renderer;
+                if (renderer != null) return renderer.enabled && renderer.gameObject.activeInHierarchy;
+                return false;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>
+        /// Copies the target's meshes into a hidden-in-hierarchy-free temporary
+        /// object positioned where the camera expects, leaving the scene intact.
+        /// </summary>
+        private static Transform BuildProxy(UnityEngine.Object target, Bounds bounds,
+            out int meshCount)
+        {
+            meshCount = 0;
+            GameObject root = new GameObject("MCP Render Proxy");
+            try
+            {
+                root.hideFlags = HideFlags.HideAndDontSave;
+                root.transform.position = bounds.center;
+
+                Renderer[] renderers;
+                Component component = target as Component;
+                GameObject source = target as GameObject
+                    ?? (component != null ? component.gameObject : null);
+                if (source == null) return null;
+                renderers = source.GetComponentsInChildren<Renderer>(true);
+
+                foreach (Renderer renderer in renderers)
+                {
+                    if (renderer == null) continue;
+                    Mesh mesh = null;
+                    var skinned = renderer as SkinnedMeshRenderer;
+                    try { mesh = skinned != null ? skinned.sharedMesh : renderer.GetComponent<MeshFilter>()?.sharedMesh; }
+                    catch { }
+                    if (mesh == null) continue;
+
+                    GameObject child = new GameObject("mesh");
+                    child.hideFlags = HideFlags.HideAndDontSave;
+                    child.transform.SetParent(root.transform, false);
+                    // Renderer bounds are in world space; proxy root sits at the
+                    // combined centre, so place each part relative to it.
+                    child.transform.position = renderer.bounds.center;
+                    child.transform.rotation = renderer.transform.rotation;
+                    child.transform.localScale = renderer.transform.lossyScale;
+                    child.AddComponent<MeshFilter>().sharedMesh = mesh;
+                    var copy = child.AddComponent<MeshRenderer>();
+                    copy.sharedMaterials = renderer.sharedMaterials;
+                    copy.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                    copy.receiveShadows = false;
+                    meshCount++;
+                }
+                return meshCount > 0 ? root.transform : null;
+            }
+            catch
+            {
+                UnityEngine.Object.Destroy(root);
+                return null;
             }
         }
 
