@@ -806,21 +806,72 @@ components.Add(new ComponentInfo
                 var list = value as System.Collections.IList;
                 if (list != null)
                 {
-                    var previews = new List<string>();
-                    int take = Math.Min(list.Count, 3);
-                    for (int i = 0; i < take; i++)
-                    {
-                        object item;
-                        try { item = list[i]; } catch { item = null; }
-                        previews.Add(BriefPreview(item));
-                    }
-                    string joined = string.Join(", ", previews.ToArray());
-                    return "[" + list.Count + "] " + (list.Count > 0 ? "{" + joined + (list.Count > take ? ", ..." : "") + "}" : "");
+                    return ListPreview(list, 3);
+                }
+                // IL2CPP interop arrays are not IList (Il2CppReferenceArray<T>
+                // exposes Length + an indexer only), so they used to fall through
+                // to ToString() and surface as just the type name.
+                int interopLength;
+                Func<int, object> interopGet;
+                if (TryInteropIndexer(value, out interopLength, out interopGet))
+                {
+                    return BuildListPreview(interopLength, 3, interopGet);
                 }
                 string text = value.ToString();
                 return text != null && text.Length > 200 ? text.Substring(0, 200) + "..." : text;
             }
             catch { return "<unprintable>"; }
+        }
+
+        private static string ListPreview(System.Collections.IList list, int take)
+        {
+            return BuildListPreview(list.Count, take, (i) => list[i]);
+        }
+
+        private static string BuildListPreview(int reportedLength, int take, Func<int, object> get)
+        {
+            var previews = new List<string>();
+            int m = Math.Min(reportedLength, take);
+            for (int i = 0; i < m; i++)
+            {
+                object item;
+                try { item = get(i); } catch { item = null; }
+                previews.Add(BriefPreview(item));
+            }
+            string joined = string.Join(", ", previews.ToArray());
+            string tail = reportedLength > m ? ", ..." : "";
+            return "[" + reportedLength + "] " + (m > 0 ? "{" + joined + tail + "}" : "");
+        }
+
+        /// <summary>
+        /// Length + indexer probe for interop array wrappers that are not IList.
+        /// </summary>
+        private static bool TryInteropIndexer(object value, out int length,
+            out Func<int, object> get)
+        {
+            length = 0;
+            get = null;
+            if (value == null) return false;
+            try
+            {
+                Type type = value.GetType();
+                System.Reflection.PropertyInfo lengthProp = type.GetProperty("Length")
+                    ?? type.GetProperty("Count");
+                System.Reflection.PropertyInfo indexer = type.GetProperty("Item");
+                if (lengthProp == null || indexer == null) return false;
+                object raw = lengthProp.GetValue(value, null);
+                if (raw == null) return false;
+                length = Convert.ToInt32(raw);
+                if (length < 0) return false;
+                int captured = length;
+                get = (i) => i >= 0 && i < captured ? indexer.GetValue(value, new object[] { i }) : null;
+                return true;
+            }
+            catch
+            {
+                get = null;
+                return false;
+            }
         }
 
         private static string BriefPreview(object item)
@@ -958,32 +1009,46 @@ components.Add(new ComponentInfo
             try
             {
                 var list = value as System.Collections.IList;
+                int count;
+                Func<int, object> get;
                 if (list != null)
                 {
-                    int count = Math.Min(list.Count, take);
-                    var items = new List<object>(count);
-                    for (int i = 0; i < count; i++)
-                    {
-                        object item;
-                        try { item = list[i]; } catch { item = null; }
-                        var unityObj = item as UnityEngine.Object;
-                        if (unityObj != null)
-                        {
-                            items.Add(new Dictionary<string, object>
-                            {
-                                { "name", unityObj.name },
-                                { "type", unityObj.GetType().Name },
-                                { "instance_id", unityObj.GetInstanceID() },
-                                { "handle", Handle.Format(unityObj.GetInstanceID()) }
-                            });
-                        }
-                        else items.Add(item);
-                    }
-                    return items;
+                    count = list.Count;
+                    get = (i) => list[i];
                 }
+                else if (!TryInteropIndexer(value, out count, out get))
+                {
+                    return value;
+                }
+
+                int m = Math.Min(count, take);
+                var items = new List<object>(m);
+                for (int i = 0; i < m; i++)
+                {
+                    object item;
+                    try { item = get(i); } catch { item = null; }
+                    var unityObj = item as UnityEngine.Object;
+                    if (unityObj != null)
+                    {
+                        items.Add(new Dictionary<string, object>
+                        {
+                            { "name", SafeObjectName(unityObj) },
+                            { "type", unityObj.GetType().Name },
+                            { "instance_id", unityObj.GetInstanceID() },
+                            { "handle", Handle.Format(unityObj.GetInstanceID()) }
+                        });
+                    }
+                    else items.Add(item);
+                }
+                return items;
             }
             catch { }
             return value;
+        }
+
+        private static string SafeObjectName(UnityEngine.Object obj)
+        {
+            try { return obj.name; } catch { return null; }
         }
         
         private MCPResponse HandleSetProperty(MCPRequest request)
