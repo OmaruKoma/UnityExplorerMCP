@@ -347,8 +347,18 @@ cd UnityExplorerMCP
 | `unity_list_labels` / `unity_set_label` / `unity_remove_label` | 按安装持久化的名称与备注 |
 | `unity_start_method_trace` / `unity_stop_method_trace` / `unity_clear_method_trace` | hook 一个托管方法（Mono） |
 | `unity_list_method_traces` / `unity_get_method_trace` / `unity_build_call_graph` | 读真实调用与 caller→target 边 |
-| `unity_capture_screenshot` | 当前帧 PNG image content；可另存文件 |
+| `unity_capture_screenshot` | 当前帧 PNG image content；可另存文件；ScreenCapture 空白时回退到实时相机渲染 |
 | `unity_render_object` | 单对象离屏渲染成 PNG；暂停或被 UI 遮挡时仍可用 |
+| `unity_frame_camera` | 把实机相机对准目标并按包围盒取景；会暂停 Cinemachine 驱动，`restore` 可还原 |
+
+`unity_capture_screenshot` 先试 `ScreenCapture`——它只在帧末回调里有效，从请求处理线程调用
+拿到的是一张清空缓冲。此时工具改为把实时相机渲染到 RenderTexture，并在 `source` 字段说明走
+了哪条路（`screen_capture` / `camera_render`）。相机路径不含 Screen Space Overlay UI。
+只有两条路都是单色时才会返回 `flat_color`。
+
+`unity_frame_camera` 按目标包围盒与相机 FOV 算距离后直接写 transform。写入前会先暂停相机上的
+Cinemachine 类驱动，否则它们每帧在 `LateUpdate` 里把 transform 改回去，取景一帧就丢。
+`restore=true` 会还原相机并重新启用这些驱动。
 
 `unity_render_object` 用一次性相机按对象包围盒取景并渲染到 RenderTexture，所以结果不取决于
 游戏最后合成的那一帧（`capture_screenshot` 拿的正是那一帧，暂停时必然是灰的）。未激活对象

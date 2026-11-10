@@ -654,7 +654,7 @@ export const TOOL_DEFS: ToolDef[] = [
   // ---- capture / logs / hooks
   tool(
     "unity_capture_screenshot",
-    "Capture the current game frame and return it as a PNG image. Optional output_path keeps a copy on disk.",
+    "Capture the current game frame and return it as a PNG image. Optional output_path keeps a copy on disk. ScreenCapture only produces a frame inside Unity's end-of-frame callback, so when it comes back blank this falls back to rendering the live camera to a RenderTexture; the `source` field says which path produced the image (screen_capture or camera_render). camera_render excludes screen-space overlay UI. flat_color appears only when both paths are blank.",
     schema({
       output_path: {
         type: "string",
@@ -739,7 +739,7 @@ export const TOOL_DEFS: ToolDef[] = [
   ),
   tool(
     "unity_frame_camera",
-    "Point a real game camera at a target object (front view, framed to its bounds). Moves the live camera, so the player view and subsequent screenshots change. Pass restore=true to put the camera back immediately; the previous transform is always returned. Defaults to the main camera and leaves it in the new position.",
+    "Point a real game camera at a target object (front view, framed to its bounds). Moves the live camera, so the player view and subsequent screenshots change. Cinemachine-style drivers on the camera are paused first, otherwise they rewrite the transform in LateUpdate and the framing is lost within a frame; restore=true puts the camera back and re-enables them. Defaults to the main camera and leaves it in the new position.",
     schema({
       target_handle: {
         type: "string",

@@ -356,8 +356,20 @@ permissions, features, limits and marshalling support for the game you are attac
 | `unity_list_labels` / `unity_set_label` / `unity_remove_label` | Per-install names and notes |
 | `unity_start_method_trace` / `unity_stop_method_trace` / `unity_clear_method_trace` | Hook a managed method (Mono) |
 | `unity_list_method_traces` / `unity_get_method_trace` / `unity_build_call_graph` | Read real calls and caller→target edges |
-| `unity_capture_screenshot` | Current frame as PNG image content; optional file copy |
+| `unity_capture_screenshot` | Current frame as PNG image content; optional file copy; falls back to a live camera render when ScreenCapture returns a blank frame |
 | `unity_render_object` | Render one object offscreen to PNG; works while paused or UI-covered |
+| `unity_frame_camera` | Aim the live camera at a target and frame its bounds; pauses Cinemachine drivers, `restore` puts it back |
+
+`unity_capture_screenshot` tries `ScreenCapture` first, which only produces a frame inside
+Unity's end-of-frame callback. Called from a request handler it returns a cleared buffer, so the
+tool renders the live camera to a RenderTexture instead and reports which path was used in
+`source` (`screen_capture` or `camera_render`). The camera path excludes screen-space overlay UI.
+`flat_color` is reported only when both paths come back single-colour.
+
+`unity_frame_camera` computes the distance from the target's bounds and the camera FOV, then
+writes the transform. Cinemachine-style drivers on the camera are paused first; otherwise they
+rewrite the transform in `LateUpdate` and the framing disappears within a frame. `restore=true`
+puts the camera back and re-enables the drivers.
 
 `unity_render_object` frames the object's bounds with a throwaway camera and renders to a
 RenderTexture, so the result does not depend on what the game last composited (screen capture

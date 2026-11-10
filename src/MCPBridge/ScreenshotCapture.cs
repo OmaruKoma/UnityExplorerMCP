@@ -18,15 +18,44 @@ namespace UnityExplorer.MCPBridge
         {
             if (maxBytes <= 0) maxBytes = BridgeConfig.MaxScreenshotBytes;
             Texture2D texture = null;
+            Texture2D cameraTexture = null;
             try
             {
                 texture = CaptureTexture();
-                if (texture == null) throw new Exception("screen capture returned no texture");
 
-                // ScreenCapture only works at end-of-frame; on this request thread it
-                // returns a cleared buffer. A single-colour image is that failure, not
-                // a scene with one colour, so say so instead of handing back grey.
-                string flat = DetectFlat(texture);
+                // ScreenCapture only works at end-of-frame; called from a request
+                // handler it returns a cleared buffer. When that happens, render the
+                // live camera to a RenderTexture instead — synchronous, no frame
+                // callback needed, and it includes whatever frame_camera aimed at.
+                string flat = texture == null ? "no texture" : DetectFlat(texture);
+                string source = "screen_capture";
+                if (texture == null || flat != null)
+                {
+                    cameraTexture = CaptureMainCamera();
+                    if (cameraTexture != null)
+                    {
+                        string cameraFlat = DetectFlat(cameraTexture);
+                        if (cameraFlat == null)
+                        {
+                            if (texture != null) UnityEngine.Object.Destroy(texture);
+                            texture = cameraTexture;
+                            cameraTexture = null;
+                            flat = null;
+                            source = "camera_render";
+                        }
+                        else
+                        {
+                            if (texture == null)
+                            {
+                                texture = cameraTexture;
+                                cameraTexture = null;
+                            }
+                            flat = cameraFlat;
+                            source = "camera_render";
+                        }
+                    }
+                }
+                if (texture == null) throw new Exception("screen capture returned no texture");
 
                 byte[] png = EncodePng(texture);
                 int scale = 0;
@@ -47,14 +76,16 @@ namespace UnityExplorer.MCPBridge
                     { "height", texture.height },
                     { "bytes", png.Length },
                     { "scaled", scale },
+                    { "source", source },
                     { "base64", Convert.ToBase64String(png) }
                 };
                 if (flat != null)
                 {
                     result["flat_color"] = flat;
-                    result["warning"] = "Screenshot is a single flat colour: ScreenCapture only "
-                        + "produces a frame inside the end-of-frame callback. Use unity_render_object "
-                        + "(offscreen camera) or unity_frame_camera + a capture on the next frame.";
+                    result["warning"] = "Every sampled pixel is identical. ScreenCapture only "
+                        + "produces a frame inside the end-of-frame callback, and the camera "
+                        + "render matched it. The scene may genuinely be blank: check that the "
+                        + "camera sees the target (unity_frame_camera) or use unity_render_object.";
                 }
                 if (!string.IsNullOrEmpty(outputPath))
                 {
@@ -78,6 +109,65 @@ namespace UnityExplorer.MCPBridge
                 {
                     try { UnityEngine.Object.Destroy(texture); } catch { }
                 }
+                if (cameraTexture != null)
+                {
+                    try { UnityEngine.Object.Destroy(cameraTexture); } catch { }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Renders the active camera into a RenderTexture and reads it back. Works
+        /// on the request thread, unlike ScreenCapture. Screen-space overlay UI is
+        /// not part of the camera's render, so the result is the 3D view only.
+        /// </summary>
+        private static Texture2D CaptureMainCamera()
+        {
+            Camera camera = null;
+            try { camera = Camera.main; } catch { }
+            if (camera == null)
+            {
+                try
+                {
+                    foreach (Camera candidate in Camera.allCameras)
+                    {
+                        if (candidate != null && candidate.enabled && candidate.targetTexture == null)
+                        {
+                            camera = candidate;
+                            break;
+                        }
+                    }
+                }
+                catch { }
+            }
+            if (camera == null) return null;
+
+            int width = Math.Max(1, Screen.width);
+            int height = Math.Max(1, Screen.height);
+            RenderTexture render = null;
+            RenderTexture previousActive = RenderTexture.active;
+            RenderTexture previousTarget = null;
+            try
+            {
+                previousTarget = camera.targetTexture;
+                render = RenderTexture.GetTemporary(width, height, 24, RenderTextureFormat.ARGB32);
+                camera.targetTexture = render;
+                camera.Render();
+                RenderTexture.active = render;
+                var texture = new Texture2D(width, height, TextureFormat.RGBA32, false);
+                texture.ReadPixels(new Rect(0, 0, width, height), 0, 0);
+                texture.Apply();
+                return texture;
+            }
+            catch
+            {
+                return null;
+            }
+            finally
+            {
+                RenderTexture.active = previousActive;
+                try { camera.targetTexture = previousTarget; } catch { }
+                if (render != null) RenderTexture.ReleaseTemporary(render);
             }
         }
 
@@ -131,6 +221,12 @@ namespace UnityExplorer.MCPBridge
             camera.nearClipPlane = Mathf.Max(0.01f, distance - radius * 2f);
             camera.farClipPlane = Mathf.Max(camera.nearClipPlane + 0.1f, distance + radius * 4f);
 
+            // CinemachineBrain rewrites the camera transform in LateUpdate, so the
+            // framing above is gone one frame later unless the driver is paused.
+            List<Behaviour> paused = restore ? null : PauseCameraDrivers(camera);
+            List<string> reenabled = null;
+            if (restore) reenabled = ResumeCameraDrivers();
+
             var result = new Dictionary<string, object>
             {
                 { "camera", camera.name },
@@ -152,6 +248,10 @@ namespace UnityExplorer.MCPBridge
                         { "far_clip", oldFar }
                     } }
             };
+            if (paused != null)
+                result["camera_drivers_paused"] = DriverNames(paused);
+            if (reenabled != null)
+                result["camera_drivers_resumed"] = reenabled;
 
             if (restore)
             {
@@ -164,10 +264,66 @@ namespace UnityExplorer.MCPBridge
             }
             else
             {
-                result["hint"] = "Camera left in the new position. Call unity_frame_camera again with "
-                    + "restore=true (same camera) to put it back, or reuse the 'previous' block.";
+                result["hint"] = "Camera left in the new position with its transform drivers "
+                    + "paused. Call unity_frame_camera again with restore=true to put it back "
+                    + "(this also re-enables the drivers), or reuse the 'previous' block.";
             }
             return result;
+        }
+
+        private static readonly List<Behaviour> _pausedDrivers = new List<Behaviour>();
+
+        /// <summary>
+        /// Disables Cinemachine-style behaviours on the camera so a written
+        /// transform survives past LateUpdate.
+        /// </summary>
+        private static List<Behaviour> PauseCameraDrivers(Camera camera)
+        {
+            var paused = new List<Behaviour>();
+            try
+            {
+                foreach (var behaviour in camera.gameObject.GetComponents<Behaviour>())
+                {
+                    if (behaviour == null || !behaviour.enabled) continue;
+                    string typeName = behaviour.GetType().Name;
+                    if (typeName.IndexOf("Cinemachine", StringComparison.OrdinalIgnoreCase) < 0)
+                        continue;
+                    behaviour.enabled = false;
+                    paused.Add(behaviour);
+                    if (!_pausedDrivers.Contains(behaviour)) _pausedDrivers.Add(behaviour);
+                }
+            }
+            catch { }
+            return paused;
+        }
+
+        private static List<string> ResumeCameraDrivers()
+        {
+            var resumed = new List<string>();
+            for (int i = _pausedDrivers.Count - 1; i >= 0; i--)
+            {
+                Behaviour behaviour = _pausedDrivers[i];
+                try
+                {
+                    if (behaviour == null) continue;
+                    behaviour.enabled = true;
+                    resumed.Add(behaviour.GetType().Name);
+                }
+                catch { }
+                _pausedDrivers.RemoveAt(i);
+            }
+            return resumed;
+        }
+
+        private static List<string> DriverNames(List<Behaviour> behaviours)
+        {
+            var names = new List<string>();
+            foreach (var behaviour in behaviours)
+            {
+                try { names.Add(behaviour.GetType().Name); }
+                catch { names.Add("?"); }
+            }
+            return names;
         }
 
         private static Dictionary<string, object> Vec(Vector3 v)
