@@ -7,62 +7,117 @@ const server = spawn('node', ['dist/server.js'], {
   stdio: ['pipe', 'pipe', 'pipe']
 });
 
-// Send tools/list request
-const request = JSON.stringify({
-  jsonrpc: '2.0',
-  id: 1,
-  method: 'tools/list',
-  params: {}
-});
+const requests = [
+  { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} },
+  {
+    jsonrpc: '2.0',
+    id: 2,
+    method: 'tools/call',
+    params: { name: 'unity_batch', arguments: { calls: [] } }
+  }
+];
 
-server.stdin.write(request + '\n');
+let buffer = '';
+let responses = 0;
+let tools = [];
 
-// Collect response
-let responseData = '';
+function send(index) {
+  if (index >= requests.length) return;
+  server.stdin.write(JSON.stringify(requests[index]) + '\n');
+}
+
 server.stdout.on('data', (data) => {
-  responseData += data.toString();
-  
-  // Check if we have a complete response
-  try {
-    const response = JSON.parse(responseData);
-    if (response.result && response.result.tools) {
-      console.log('MCP Tools registered successfully:');
-      console.log('==================================');
-      response.result.tools.forEach((tool, index) => {
-        console.log(`${index + 1}. ${tool.name}`);
-        console.log(`   ${tool.description}`);
-        console.log('');
-      });
-      const expected = ['unity_ping', 'unity_scene_info', 'unity_find_gameobjects',
-        'unity_get_gameobject', 'unity_get_components', 'unity_inspect', 'unity_get_field',
-        'unity_set_field', 'unity_get_property', 'unity_set_property', 'unity_invoke_method',
-        'unity_hierarchy', 'unity_execute_csharp', 'unity_list_assemblies', 'unity_inspect_type',
-        'unity_invoke_static', 'unity_resolve_path', 'unity_tail_log', 'unity_capabilities',
-        'unity_search_members', 'unity_find_objects_of_type', 'unity_get_static',
-        'unity_set_static', 'unity_list_hooks'];
-      const names = response.result.tools.map(t => t.name);
-      const missing = expected.filter(n => !names.includes(n));
-      if (missing.length > 0) {
-        console.log('MISSING TOOLS: ' + missing.join(', '));
-        server.kill();
-        process.exit(1);
-      }
-      console.log(`All ${expected.length} tools present (19 existing + 5 Phase-3).`);
-      server.kill();
-      process.exit(0);
+  buffer += data.toString();
+  let newline;
+  while ((newline = buffer.indexOf('\n')) >= 0) {
+    const line = buffer.slice(0, newline).trim();
+    buffer = buffer.slice(newline + 1);
+    if (!line) continue;
+    let response;
+    try {
+      response = JSON.parse(line);
+    } catch {
+      continue;
     }
-  } catch (e) {
-    // Not complete JSON yet, wait for more data
+    responses++;
+    if (response.id === 1 && response.result?.tools) {
+      tools = response.result.tools;
+      checkCatalog();
+      send(1);
+    } else if (response.id === 2) {
+      checkBatchGuard(response);
+      finish(0);
+    }
   }
 });
 
-server.stderr.on('data', (data) => {
-  // Ignore stderr for this test
+function checkCatalog() {
+  console.log(`Tools registered: ${tools.length}`);
+  const required = [
+    'unity_capabilities', 'unity_batch', 'unity_list_bridges', 'unity_select_bridge',
+    'unity_snapshot_object', 'unity_diff_snapshot', 'unity_undo_write',
+    'unity_start_instance_scan', 'unity_get_instance_scan', 'unity_search_values',
+    'unity_read_array', 'unity_decode_byte_array', 'unity_set_label',
+    'unity_remove_label', 'unity_list_labels', 'unity_start_method_trace',
+    'unity_stop_method_trace', 'unity_clear_method_trace', 'unity_list_method_traces',
+    'unity_get_method_trace', 'unity_build_call_graph', 'unity_capture_screenshot',
+    'unity_activity_log', 'unity_execute_csharp', 'unity_tail_log'
+  ];
+  const names = tools.map((t) => t.name);
+  const missing = required.filter((n) => !names.includes(n));
+  const noAnnotations = tools.filter((t) => !t.annotations).map((t) => t.name);
+  const writeFlaggedRead = tools
+    .filter(
+      (t) =>
+        (t.name === 'unity_set_field' || t.name === 'unity_execute_csharp') &&
+        t.annotations.readOnlyHint !== false
+    )
+    .map((t) => t.name);
+  const readFlaggedWrite = tools
+    .filter(
+      (t) => t.name === 'unity_get_field' && t.annotations.readOnlyHint !== true
+    )
+    .map((t) => t.name);
+
+  if (missing.length) console.log(`MISSING TOOLS: ${missing.join(', ')}`);
+  if (noAnnotations.length)
+    console.log(`MISSING ANNOTATIONS: ${noAnnotations.join(', ')}`);
+  if (writeFlaggedRead.length)
+    console.log(`WRITE FLAGGED READ-ONLY: ${writeFlaggedRead.join(', ')}`);
+  if (readFlaggedWrite.length)
+    console.log(`READ FLAGGED WRITE: ${readFlaggedWrite.join(', ')}`);
+
+  if (missing.length || noAnnotations.length || writeFlaggedRead.length || readFlaggedWrite.length) {
+    finish(1);
+  }
+}
+
+function checkBatchGuard(response) {
+  const text = response.result?.content?.[0]?.text ?? '';
+  if (response.result?.isError && /at least one call/.test(text)) {
+    console.log('batch validation: ok (empty batch rejected before bridge call)');
+  } else {
+    console.log('batch validation: FAILED -> ' + text.slice(0, 200));
+    finish(1);
+  }
+}
+
+let finished = false;
+function finish(code) {
+  if (finished) return;
+  finished = true;
+  server.kill();
+  process.exit(code);
+}
+
+server.stderr.on('data', () => {
+  // Startup notices are expected on stderr; stdout carries MCP only.
 });
 
-// Timeout after 5 seconds
+send(0);
+
 setTimeout(() => {
-  console.log('Timeout waiting for response');
+  console.log(`Timeout waiting for responses (got ${responses})`);
   server.kill();
   process.exit(1);
-}, 5000);
+}, 8000);

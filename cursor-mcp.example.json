@@ -2,9 +2,10 @@
   "mcpServers": {
     "unity": {
       "command": "node",
-      "args": ["<REPO_PATH>/mcp-server/dist/server.js"],
+      "args": [
+        "<REPO_PATH>/mcp-server/dist/server.js"
+      ],
       "env": {
-        "UNITY_BRIDGE_URL": "http://127.0.0.1:12345",
         "UNITY_BRIDGE_TIMEOUT": "120000",
         "UNITY_GAME_ROOT": "<GAME_ROOT_WITH_BEPINEX>"
       }

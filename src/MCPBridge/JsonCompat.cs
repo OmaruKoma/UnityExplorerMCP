@@ -31,6 +31,21 @@ namespace System.Text.Json
         public bool PropertyNameCaseInsensitive { get; set; }
     }
 
+    public struct JsonProperty
+    {
+        private readonly string _name;
+        private readonly JsonElement _value;
+
+        internal JsonProperty(string name, JsonElement value)
+        {
+            _name = name;
+            _value = value;
+        }
+
+        public string Name { get { return _name; } }
+        public JsonElement Value { get { return _value; } }
+    }
+
     public struct JsonElement
     {
         private readonly JsonValueKind _kind;
@@ -137,6 +152,14 @@ namespace System.Text.Json
         {
             Require(JsonValueKind.Array);
             return (List<JsonElement>)_value;
+        }
+
+        public IEnumerable<JsonProperty> EnumerateObject()
+        {
+            Require(JsonValueKind.Object);
+            var dict = (Dictionary<string, JsonElement>)_value;
+            foreach (var pair in dict)
+                yield return new JsonProperty(pair.Key, pair.Value);
         }
 
         public string GetRawText() { return _raw ?? ""; }

@@ -79,13 +79,23 @@ Environment variables (all optional except where noted):
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `UNITY_BRIDGE_URL` | `http://127.0.0.1:12345` | Bridge address (protocol default, keep as-is for local games) |
-| `MCP_BRIDGE_PORT` | `12345` | Bridge listen port, read in-game (match with `UNITY_BRIDGE_URL`) |
-| `REQUEST_TIMEOUT` | `30000` | MCP Server request timeout (ms) |
+| `UNITY_BRIDGE_URL` | — | Pin one bridge; leave unset to discover running games |
+| `UNITY_BRIDGE_PID` | — | Prefer a discovered bridge by process id |
+| `UNITY_BRIDGE_TIMEOUT` | `120000` | Server → bridge request timeout (ms) |
+| `UNITY_MCP_TRANSPORT` | `stdio` | `stdio` or `http` (`--transport http`) |
+| `UNITY_MCP_HTTP_PORT` | `8765` | Streamable HTTP port |
 | `UNITY_GAME_ROOT` | — | Game root for `unity_tail_log` auto-detection |
+| `UNITY_RESULT_BUDGET` | `120000` | Result budget before largest-array trimming |
+| `UNITY_BATCH_BUDGET` | `28000` | Budget for `unity_batch` |
+| `MCP_BRIDGE_PORT` | `12345` | Preferred bridge port; walks forward when busy |
+| `MCP_PERMISSION_PRESET` | `full` | `read-only` disables write/invoke/execute/trace |
+| `MCP_ALLOW_WRITE` / `_INVOKE` / `_EXECUTE` / `_TRACE` | `true` | Per-capability gates |
 | `MCP_ARRAY_LIMIT` | `500` | Max inlined array items (bridge) |
 | `MCP_OUTPUT_LIMIT` | `8192` | Max string chars before truncation (bridge) |
 | `MCP_BYTE_LIMIT` | `32768` | Max raw bytes before truncation (bridge) |
+
+In-game permissions can also live in `BepInEx/config/UnityExplorerMCP.cfg`; see the
+README configuration table for the full list.
 
 ## Step 4: Run
 

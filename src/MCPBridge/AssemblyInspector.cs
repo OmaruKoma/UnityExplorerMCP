@@ -98,28 +98,32 @@ namespace UnityExplorer.MCPBridge
                 object val;
                 try { val = f.GetValue(null); if (!f.IsStatic) val = "<instance member; use unity_get_field with instance_id>"; }
                 catch (Exception ex) { val = "<error: " + ex.GetType().Name + ">"; }
-                fields.Add(new Dictionary<string, object>
+                var fieldEntry = new Dictionary<string, object>
                 {
                     { "name", f.Name },
                     { "type", f.FieldType.FullName },
                     { "isStatic", f.IsStatic },
                     { "canWrite", !(f.IsLiteral && !f.IsInitOnly) },
                     { "value", val != null ? val.ToString() : "null" }
-                });
+                };
+                Labels.Decorate(fieldEntry, type.FullName, f.Name);
+                fields.Add(fieldEntry);
             }
             var props = new List<Dictionary<string, object>>();
             foreach (PropertyInfo p in type.GetProperties(flags))
             {
                 if (!MemberMatches(p.Name, memberContains)) continue;
                 MethodInfo accessor = p.GetGetMethod(true) ?? p.GetSetMethod(true);
-                props.Add(new Dictionary<string, object>
+                var propertyEntry = new Dictionary<string, object>
                 {
                     { "name", p.Name },
                     { "type", p.PropertyType.FullName },
                     { "isStatic", accessor != null ? accessor.IsStatic : false },
                     { "canRead", p.CanRead },
                     { "canWrite", p.CanWrite }
-                });
+                };
+                Labels.Decorate(propertyEntry, type.FullName, p.Name);
+                props.Add(propertyEntry);
             }
             var methods = new List<Dictionary<string, object>>();
             foreach (MethodInfo m in type.GetMethods(flags))
@@ -136,13 +140,15 @@ namespace UnityExplorer.MCPBridge
                         { "isOut", pi.IsOut || pi.ParameterType.IsByRef }
                     });
                 }
-                methods.Add(new Dictionary<string, object>
+                var methodEntry = new Dictionary<string, object>
                 {
                     { "name", m.Name },
                     { "returnType", m.ReturnType.FullName },
                     { "isStatic", m.IsStatic },
                     { "parameters", ps }
-                });
+                };
+                Labels.Decorate(methodEntry, type.FullName, m.Name);
+                methods.Add(methodEntry);
             }
             var result = new Dictionary<string, object>
             {
@@ -206,7 +212,7 @@ namespace UnityExplorer.MCPBridge
                             foreach (FieldInfo f in t.GetFields(flags))
                             {
                                 if (!MemberMatches(f.Name, nameContains)) continue;
-                                results.Add(new Dictionary<string, object>
+                                var entry = new Dictionary<string, object>
                                 {
                                     { "assembly", asmName },
                                     { "type", tname },
@@ -214,7 +220,9 @@ namespace UnityExplorer.MCPBridge
                                     { "member_kind", "field" },
                                     { "is_static", f.IsStatic },
                                     { "signature", (f.FieldType != null ? ShortName(f.FieldType) : "?") + " " + f.Name }
-                                });
+                                };
+                                Labels.Decorate(entry, tname, f.Name);
+                                results.Add(entry);
                             }
                         }
                         if (wantProp)
@@ -223,7 +231,7 @@ namespace UnityExplorer.MCPBridge
                             {
                                 if (!MemberMatches(p.Name, nameContains)) continue;
                                 MethodInfo acc = p.GetGetMethod(true) ?? p.GetSetMethod(true);
-                                results.Add(new Dictionary<string, object>
+                                var entry = new Dictionary<string, object>
                                 {
                                     { "assembly", asmName },
                                     { "type", tname },
@@ -232,7 +240,9 @@ namespace UnityExplorer.MCPBridge
                                     { "is_static", acc != null && acc.IsStatic },
                                     { "signature", (p.PropertyType != null ? ShortName(p.PropertyType) : "?") + " " + p.Name
                                         + (p.CanRead && p.CanWrite ? " { get; set; }" : (p.CanRead ? " { get; }" : " { set; }")) }
-                                });
+                                };
+                                Labels.Decorate(entry, tname, p.Name);
+                                results.Add(entry);
                             }
                         }
                         if (wantMethod)
@@ -246,7 +256,7 @@ namespace UnityExplorer.MCPBridge
                                     Type pt = pi.ParameterType.IsByRef ? pi.ParameterType.GetElementType() : pi.ParameterType;
                                     ps.Add(((pi.IsOut || pi.ParameterType.IsByRef) ? "out " : "") + ShortName(pt) + " " + pi.Name);
                                 }
-                                results.Add(new Dictionary<string, object>
+                                var entry = new Dictionary<string, object>
                                 {
                                     { "assembly", asmName },
                                     { "type", tname },
@@ -254,7 +264,9 @@ namespace UnityExplorer.MCPBridge
                                     { "member_kind", "method" },
                                     { "is_static", m.IsStatic },
                                     { "signature", ShortName(m.ReturnType) + " " + m.Name + "(" + string.Join(", ", ps.ToArray()) + ")" }
-                                });
+                                };
+                                Labels.Decorate(entry, tname, m.Name);
+                                results.Add(entry);
                             }
                         }
                     }
@@ -285,13 +297,14 @@ namespace UnityExplorer.MCPBridge
             foreach (UnityEngine.Object o in UnityEngine.Resources.FindObjectsOfTypeAll<UnityEngine.Object>())
             {
                 if (o == null) continue;
+                Type concrete = MCPBridge.ConcreteType(o);
                 bool match = false;
-                try { match = type.IsInstanceOfType(o); }
+                try { match = type.IsAssignableFrom(concrete); }
                 catch { continue; }
                 if (!match) continue;
                 var entry = new Dictionary<string, object>
                 {
-                    { "type", (o.GetType() != null && o.GetType().FullName != null) ? o.GetType().FullName : typeFullName },
+                    { "type", (concrete != null && concrete.FullName != null) ? concrete.FullName : typeFullName },
                     { "instance_id", o.GetInstanceID() },
                     { "handle", Handle.Format(o.GetInstanceID()) }
                 };
@@ -427,8 +440,19 @@ namespace UnityExplorer.MCPBridge
         /// <summary>Overload-aware resolution for instance or static managed methods.</summary>
         public static StaticCall ResolveInstanceCall(Type type, string methodName, List<JsonElement> rawArgs)
         {
-            var candidates = type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static)
-                .Where(m => m.Name == methodName && !m.IsSpecialName).ToList();
+            var candidates = new List<MethodInfo>();
+            var seen = new HashSet<MethodInfo>();
+            for (Type t = type; t != null; t = t.BaseType)
+            {
+                MethodInfo[] methods;
+                try { methods = t.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly); }
+                catch { continue; }
+                foreach (MethodInfo m in methods)
+                {
+                    if (m.Name != methodName || m.IsSpecialName) continue;
+                    if (seen.Add(m)) candidates.Add(m);
+                }
+            }
             if (candidates.Count == 0)
                 throw new Exception("Method not found: " + type.FullName + "." + methodName);
 

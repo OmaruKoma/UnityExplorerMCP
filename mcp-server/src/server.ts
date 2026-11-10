@@ -2,995 +2,715 @@
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import axios, { AxiosInstance } from "axios";
-import { z } from "zod";
+import { createServer as createHttpServer } from "node:http";
 import { tailLog } from "./logTail.js";
+import { BATCH_ALLOWED, TOOL_DEFS, TOOL_NAMES } from "./tools.js";
+import { renderResult, RESULT_BUDGET } from "./compaction.js";
+import { BridgeManager } from "./bridge.js";
 
-// Configuration
-const UNITY_BRIDGE_URL = process.env.UNITY_BRIDGE_URL || "http://127.0.0.1:12345";
-// Compiling C# in-process can take tens of seconds; IL2CPP FindObjectsOfType is slower still.
-const REQUEST_TIMEOUT = parsePositiveInt(
-  process.env.UNITY_BRIDGE_TIMEOUT || process.env.REQUEST_TIMEOUT,
-  120000
-);
-// Connectivity probes must fail fast: a frozen Unity main thread (runInBackground=false)
-// otherwise stalls MCP server startup for the full request timeout.
-const PING_TIMEOUT = Math.min(REQUEST_TIMEOUT, 5000);
-// Cap on tool result text. The host drops/aborts on multi-megabyte tool results
-// (observed: a single find_gameobjects reply of 3.2M chars killed the transport and
-// every later call failed), so oversized payloads are cut and paged instead.
-const MAX_TEXT_BYTES = parsePositiveInt(process.env.UNITY_MCP_MAX_BYTES, 1500000);
+const VERSION = "1.3.0";
+const BATCH_BUDGET = positiveInt(process.env.UNITY_BATCH_BUDGET, 28_000);
+const MAX_TOOL_TEXT = positiveInt(process.env.UNITY_MCP_MAX_BYTES, 1_500_000);
+const connectors = new BridgeManager();
 
-function parsePositiveInt(raw: string | undefined, fallback: number): number {
+function positiveInt(raw: string | undefined, fallback: number): number {
   const value = Number.parseInt(raw ?? "", 10);
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-// Unity Bridge Client
-class UnityBridgeClient {
-  private client: AxiosInstance;
-  private baseUrl: string;
-  private connected: boolean = false;
+type ToolContent =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: string };
 
-  constructor(baseUrl: string, timeout: number) {
-    this.baseUrl = baseUrl;
-    this.client = axios.create({
-      baseURL: baseUrl,
-      timeout: timeout,
-      headers: {
-        "Content-Type": "application/json",
-      },
-      // Keep raw body so an oversized response is not silently re-parsed.
-      maxContentLength: Infinity,
-      maxBodyLength: Infinity,
-    });
-  }
-
-  async ping(): Promise<boolean> {
-    try {
-      const response = await this.client.post(
-        "/",
-        { method: "ping", params: {} },
-        { timeout: PING_TIMEOUT }
-      );
-      this.connected = response.data?.Success ?? response.data?.success ?? false;
-      return this.connected;
-    } catch (error) {
-      this.connected = false;
-      return false;
-    }
-  }
-
-  /**
-   * Never throws. Every outcome (transport error, timeout, malformed body) is
-   * folded into the bridge's own {Success, Data, Error} envelope so the MCP layer
-   * can surface the real reason instead of a generic JSON-RPC -32603.
-   */
-  async request(method: string, params: any = {}): Promise<any> {
-    try {
-      const response = await this.client.post("/", { method, params });
-      const data = response.data;
-      if (!data || typeof data !== "object") {
-        return {
-          Success: false,
-          Data: null,
-          Error: `bridge ${method} returned non-object response (${typeof data})`,
-        };
-      }
-      this.connected = data.Success ?? data.success ?? this.connected;
-      return data;
-    } catch (error: any) {
-      this.connected = false;
-      if (error?.response?.data) {
-        return error.response.data;
-      }
-      const detail =
-        error?.code === "ECONNABORTED"
-          ? `timed out after ${this.client.defaults.timeout}ms`
-          : error?.message ?? String(error);
-      return {
-        Success: false,
-        Data: null,
-        Error: `bridge ${method} failed: ${detail} (url ${this.baseUrl})`,
-      };
-    }
-  }
-
-  isConnected(): boolean {
-    return this.connected;
-  }
+interface ToolResult {
+  content: ToolContent[];
+  isError?: boolean;
 }
 
-/**
- * JSON.stringify that survives IL2CPP interop graphs (cycles, BigInt, functions)
- * and never throws, plus a size cap for LLM/protocol friendliness.
- */
-function serializeResult(value: unknown): string {
-  const seen = new WeakSet<object>();
-  let json: string;
+interface BridgeCall {
+  envelope: any;
+  text: string;
+  failed: boolean;
+}
+
+const BRIDGE_ROUTES: Record<
+  string,
+  (args: any) => { method: string; params: Record<string, unknown> }
+> = {
+  unity_ping: () => ({ method: "ping", params: {} }),
+  unity_scene_info: () => ({ method: "scene_info", params: {} }),
+  unity_capabilities: () => ({ method: "capabilities", params: {} }),
+  unity_find_gameobjects: (a) => ({
+    method: "find_gameobjects",
+    params: {
+      name: a?.name,
+      include_inactive: a?.include_inactive ?? true,
+      limit: a?.limit,
+      cursor: a?.cursor,
+      name_contains: a?.name_contains,
+    },
+  }),
+  unity_get_gameobject: (a) => ({
+    method: "get_gameobject",
+    params: { instance_id: a?.instance_id, handle: a?.handle },
+  }),
+  unity_get_components: (a) => ({
+    method: "get_components",
+    params: { instance_id: a?.instance_id, handle: a?.handle },
+  }),
+  unity_inspect: (a) => ({
+    method: "inspect",
+    params: {
+      instance_id: a?.instance_id,
+      handle: a?.handle,
+      type_name: a?.type_name,
+      member_limit: a?.member_limit,
+    },
+  }),
+  unity_get_field: (a) => ({
+    method: "get_field",
+    params: {
+      instance_id: a?.instance_id,
+      handle: a?.handle,
+      type: a?.type,
+      field: a?.field,
+    },
+  }),
+  unity_set_field: (a) => ({
+    method: "set_field",
+    params: {
+      instance_id: a?.instance_id,
+      handle: a?.handle,
+      type: a?.type,
+      field: a?.field,
+      value: a?.value,
+    },
+  }),
+  unity_get_property: (a) => ({
+    method: "get_property",
+    params: {
+      instance_id: a?.instance_id,
+      handle: a?.handle,
+      type: a?.type,
+      property: a?.property,
+    },
+  }),
+  unity_set_property: (a) => ({
+    method: "set_property",
+    params: {
+      instance_id: a?.instance_id,
+      handle: a?.handle,
+      type: a?.type,
+      property: a?.property,
+      value: a?.value,
+    },
+  }),
+  unity_invoke_method: (a) => ({
+    method: "invoke_method",
+    params: {
+      instance_id: a?.instance_id,
+      handle: a?.handle,
+      type: a?.type,
+      method: a?.method,
+      args: a?.args,
+      returnEncoding: a?.returnEncoding ?? "hex",
+    },
+  }),
+  unity_hierarchy: (a) => ({
+    method: "hierarchy",
+    params: {
+      max_depth: a?.max_depth ?? 10,
+      name_contains: a?.name_contains,
+      limit: a?.limit,
+    },
+  }),
+  unity_execute_csharp: (a) => ({
+    method: "execute_csharp",
+    params: { code: a?.code, returnEncoding: a?.returnEncoding ?? "hex" },
+  }),
+  unity_list_assemblies: (a) => ({
+    method: "list_assemblies",
+    params: { filter: a?.filter, limit: a?.limit, cursor: a?.cursor },
+  }),
+  unity_inspect_type: (a) => ({
+    method: "inspect_type",
+    params: {
+      type: a?.type,
+      assembly: a?.assembly,
+      member_limit: a?.member_limit,
+      member_contains: a?.member_contains,
+    },
+  }),
+  unity_invoke_static: (a) => ({
+    method: "invoke_static",
+    params: {
+      type: a?.type,
+      assembly: a?.assembly,
+      method: a?.method,
+      args: a?.args,
+      returnEncoding: a?.returnEncoding ?? "hex",
+    },
+  }),
+  unity_resolve_path: (a) => ({
+    method: "resolve_path",
+    params: { path: a?.path },
+  }),
+  unity_search_members: (a) => ({
+    method: "search_members",
+    params: {
+      name_contains: a?.name_contains,
+      type_filter: a?.type_filter,
+      member_kind: a?.member_kind,
+      assembly_filter: a?.assembly_filter,
+      limit: a?.limit,
+      cursor: a?.cursor,
+    },
+  }),
+  unity_find_objects_of_type: (a) => ({
+    method: "find_objects_of_type",
+    params: {
+      type: a?.type,
+      assembly: a?.assembly,
+      limit: a?.limit,
+      cursor: a?.cursor,
+    },
+  }),
+  unity_start_instance_scan: (a) => ({
+    method: "start_instance_scan",
+    params: {
+      type: a?.type,
+      assembly: a?.assembly,
+      include_inactive: a?.include_inactive,
+    },
+  }),
+  unity_get_instance_scan: (a) => ({
+    method: "get_instance_scan",
+    params: { scan_id: a?.scan_id, cursor: a?.cursor, limit: a?.limit },
+  }),
+  unity_search_values: (a) => ({
+    method: "search_values",
+    params: {
+      value: a?.value,
+      field_contains: a?.field_contains,
+      component_type: a?.component_type,
+      scene: a?.scene,
+      include_inactive: a?.include_inactive,
+      match_mode: a?.match_mode,
+      limit: a?.limit,
+      cursor: a?.cursor,
+    },
+  }),
+  unity_get_static: (a) => ({
+    method: "get_static",
+    params: {
+      type: a?.type,
+      member: a?.member,
+      assembly: a?.assembly,
+      returnEncoding: a?.returnEncoding ?? "hex",
+    },
+  }),
+  unity_set_static: (a) => ({
+    method: "set_static",
+    params: {
+      type: a?.type,
+      member: a?.member,
+      value: a?.value,
+      assembly: a?.assembly,
+    },
+  }),
+  unity_read_array: (a) => ({
+    method: "read_array",
+    params: {
+      instance_id: a?.instance_id,
+      handle: a?.handle,
+      member: a?.member,
+      cursor: a?.cursor,
+      limit: a?.limit,
+    },
+  }),
+  unity_decode_byte_array: (a) => ({
+    method: "decode_byte_array",
+    params: {
+      instance_id: a?.instance_id,
+      handle: a?.handle,
+      member: a?.member,
+      data: a?.data,
+      encoding: a?.encoding,
+      format: a?.format,
+    },
+  }),
+  unity_snapshot_object: (a) => ({
+    method: "snapshot_object",
+    params: {
+      instance_id: a?.instance_id,
+      handle: a?.handle,
+      type: a?.type,
+      member_contains: a?.member_contains,
+      member_limit: a?.member_limit,
+      include_properties: a?.include_properties,
+    },
+  }),
+  unity_diff_snapshot: (a) => ({
+    method: "diff_snapshot",
+    params: {
+      snapshot: a?.snapshot,
+      against: a?.against,
+      rebase: a?.rebase,
+      epsilon: a?.epsilon,
+    },
+  }),
+  unity_undo_write: (a) => ({
+    method: "undo_write",
+    params: { steps: a?.steps },
+  }),
+  unity_list_labels: (a) => ({
+    method: "list_labels",
+    params: {
+      type_contains: a?.type_contains,
+      limit: a?.limit,
+      cursor: a?.cursor,
+    },
+  }),
+  unity_set_label: (a) => ({
+    method: "set_label",
+    params: {
+      type: a?.type,
+      member: a?.member,
+      label: a?.label,
+      note: a?.note,
+    },
+  }),
+  unity_remove_label: (a) => ({
+    method: "remove_label",
+    params: { type: a?.type, member: a?.member },
+  }),
+  unity_start_method_trace: (a) => ({
+    method: "start_method_trace",
+    params: {
+      type: a?.type,
+      method: a?.method,
+      assembly: a?.assembly,
+      param_count: a?.param_count,
+    },
+  }),
+  unity_stop_method_trace: (a) => ({
+    method: "stop_method_trace",
+    params: { trace_id: a?.trace_id },
+  }),
+  unity_clear_method_trace: (a) => ({
+    method: "clear_method_trace",
+    params: { trace_id: a?.trace_id },
+  }),
+  unity_list_method_traces: () => ({
+    method: "list_method_traces",
+    params: {},
+  }),
+  unity_get_method_trace: (a) => ({
+    method: "get_method_trace",
+    params: {
+      trace_id: a?.trace_id,
+      cursor: a?.cursor,
+      limit: a?.limit,
+    },
+  }),
+  unity_build_call_graph: (a) => ({
+    method: "build_call_graph",
+    params: { trace_id: a?.trace_id, cursor: a?.cursor, limit: a?.limit },
+  }),
+  unity_list_hooks: (a) => ({
+    method: "list_hooks",
+    params: { limit: a?.limit, cursor: a?.cursor },
+  }),
+  unity_activity_log: (a) => ({
+    method: "activity_log",
+    params: { limit: a?.limit, cursor: a?.cursor },
+  }),
+  unity_capture_screenshot: (a) => ({
+    method: "capture_screenshot",
+    params: { output_path: a?.output_path, max_bytes: a?.max_bytes },
+  }),
+};
+
+async function bridgeCall(
+  method: string,
+  params: Record<string, unknown>
+): Promise<BridgeCall> {
+  const envelope = await connectors.request(method, params);
+  const failed =
+    envelope && typeof envelope === "object" && envelope.Success === false;
+  let text = renderResult(envelope, Math.min(RESULT_BUDGET, MAX_TOOL_TEXT));
+  if (Buffer.byteLength(text, "utf8") > MAX_TOOL_TEXT) {
+    text = text.slice(0, MAX_TOOL_TEXT);
+  }
+  return { envelope, text, failed };
+}
+
+function bridgeError(message: string): ToolResult {
+  return { content: [{ type: "text", text: `Error: ${message}` }], isError: true };
+}
+
+async function ensureConnection(): Promise<ToolResult | null> {
+  if (connectors.isConnected()) return null;
+  let ok = false;
   try {
-    json = JSON.stringify(
-      value,
-      (_key, val) => {
-        if (typeof val === "bigint") return val.toString();
-        if (typeof val === "function") return `[function ${val.name || "anonymous"}]`;
-        if (typeof val === "object" && val !== null) {
-          if (seen.has(val)) return "[circular]";
-          seen.add(val);
-        }
-        return val;
-      },
-      2
-    );
+    ok = await connectors.ping();
   } catch (error: any) {
-    return `[unserializable result: ${error?.message ?? error}]`;
+    if (error?.bridges) {
+      const lines = error.bridges
+        .map(
+          (b: any) =>
+            `pid ${b.pid ?? "?"} port ${b.port} ${b.backend ?? ""} ${
+              b.session_id ?? ""
+            }`
+        )
+        .join("\n");
+      return bridgeError(
+        `${error.message}\n${lines}\nCall unity_list_bridges, then unity_select_bridge.`
+      );
+    }
+    return bridgeError(error?.message ?? String(error));
   }
-  if (json === undefined) {
-    return String(value);
+  if (!ok) {
+    return bridgeError(
+      "Cannot connect to a Unity bridge. Start the game with the MCP bridge loaded, or call unity_list_bridges to see discovered targets."
+    );
   }
-  const bytes = Buffer.from(json, "utf8");
-  if (bytes.length > MAX_TEXT_BYTES) {
-    const kept = bytes.subarray(0, MAX_TEXT_BYTES).toString("utf8");
-    return `${kept}\n... [truncated: kept ${MAX_TEXT_BYTES} of ${bytes.length} bytes; narrow the query (name_contains/limit/cursor) or raise UNITY_MCP_MAX_BYTES]`;
-  }
-  return json;
+  return null;
 }
 
-// MCP Server
-class UnityExplorerMCPServer {
-  private server: Server;
-  private bridge: UnityBridgeClient;
+function stringifySummary(envelope: any, extra: Record<string, unknown> = {}) {
+  const data = envelope?.Data ?? envelope?.data ?? {};
+  const copy: Record<string, unknown> = { ...data, ...extra };
+  if (typeof copy.base64 === "string") {
+    copy.base64_bytes = copy.base64.length;
+    delete copy.base64;
+  }
+  return JSON.stringify(copy, null, 2);
+}
 
-  constructor() {
-    this.server = new Server(
-      {
-        name: "unity-explorer-mcp-server",
-        version: "1.0.0",
-      },
-      {
-        capabilities: {
-          tools: {},
-        },
-      }
-    );
-
-    this.bridge = new UnityBridgeClient(UNITY_BRIDGE_URL, REQUEST_TIMEOUT);
-    this.setupHandlers();
+async function runTool(name: string, args: any): Promise<ToolResult> {
+  // Local tools first: they must work with the game down.
+  if (name === "unity_tail_log") {
+    const logResult = await tailLog({
+      path: args?.path as string | undefined,
+      lines: (args?.lines as number | undefined) ?? 100,
+      keyword: args?.keyword as string | undefined,
+    });
+    return { content: [{ type: "text", text: renderResult(logResult) }] };
   }
 
-  private setupHandlers() {
-    // List available tools
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => {
-      return {
-        tools: [
-          {
-            name: "unity_ping",
-            description: "Ping the Unity Bridge to check connectivity",
-            inputSchema: {
-              type: "object",
-              properties: {},
-              required: [],
-            },
-          },
-          {
-            name: "unity_scene_info",
-            description: "Get information about the current Unity scene",
-            inputSchema: {
-              type: "object",
-              properties: {},
-              required: [],
-            },
-          },
-          {
-            name: "unity_find_gameobjects",
-            description: "Find GameObjects by name in the Unity scene. Returns session-aware handles. Pass limit/cursor for large scenes.",
-            inputSchema: {
-              type: "object",
-              properties: {
-                name: {
-                  type: "string",
-                  description: "Name to search for (partial match)",
-                },
-                include_inactive: {
-                  type: "boolean",
-                  description: "Include inactive GameObjects",
-                  default: true,
-                },
-                limit: {
-                  type: "number",
-                  description: "Max items per page (envelope with next_cursor when set)",
-                },
-                cursor: {
-                  type: "number",
-                  description: "Start offset for pagination",
-                },
-                name_contains: {
-                  type: "string",
-                  description: "Additional case-insensitive substring filter",
-                },
-              },
-              required: [],
-            },
-          },
-          {
-            name: "unity_get_gameobject",
-            description: "Get detailed information about a specific GameObject. Prefer handle (session:id) over instance_id.",
-            inputSchema: {
-              type: "object",
-              properties: {
-                instance_id: {
-                  type: "number",
-                  description: "Instance ID of the GameObject (legacy; either this or handle)",
-                },
-                handle: {
-                  type: "string",
-                  description: "Session-aware handle (session:id), e.g. from find/resolve/hierarchy",
-                },
-              },
-              required: [],
-            },
-          },
-          {
-            name: "unity_get_components",
-            description: "Get all components attached to a GameObject. Prefer handle over instance_id.",
-            inputSchema: {
-              type: "object",
-              properties: {
-                instance_id: {
-                  type: "number",
-                  description: "Instance ID of the GameObject (legacy; either this or handle)",
-                },
-                handle: {
-                  type: "string",
-                  description: "Session-aware handle (session:id)",
-                },
-              },
-              required: [],
-            },
-          },
-          {
-            name: "unity_inspect",
-            description: "Inspect an object and get its fields, properties, and methods (member lists capped, see member_limit)",
-            inputSchema: {
-              type: "object",
-              properties: {
-                instance_id: {
-                  type: "number",
-                  description: "Instance ID of the object (legacy; either this or handle)",
-                },
-                handle: {
-                  type: "string",
-                  description: "Session-aware handle (session:id)",
-                },
-                type_name: {
-                  type: "string",
-                  description: "Full type name (for static inspection)",
-                },
-                member_limit: {
-                  type: "number",
-                  description: "Max fields/methods returned (default 200)",
-                },
-              },
-              required: [],
-            },
-          },
-          {
-            name: "unity_get_field",
-            description: "Get the value of a field from an object. Prefer handle over instance_id.",
-            inputSchema: {
-              type: "object",
-              properties: {
-                instance_id: {
-                  type: "number",
-                  description: "Instance ID of the object (legacy; either this or handle)",
-                },
-                handle: {
-                  type: "string",
-                  description: "Session-aware handle (session:id)",
-                },
-                type: {
-                  type: "string",
-                  description: "Full type name of the object",
-                },
-                field: {
-                  type: "string",
-                  description: "Name of the field",
-                },
-              },
-              required: ["field"],
-            },
-          },
-          {
-            name: "unity_set_field",
-            description: "Set the value of a field on an object. Session-bound handles are validated (stale handles fail fast).",
-            inputSchema: {
-              type: "object",
-              properties: {
-                instance_id: {
-                  type: "number",
-                  description: "Instance ID of the object (legacy; either this or handle)",
-                },
-                handle: {
-                  type: "string",
-                  description: "Session-aware handle (session:id); session is validated",
-                },
-                type: {
-                  type: "string",
-                  description: "Full type name of the object",
-                },
-                field: {
-                  type: "string",
-                  description: "Name of the field",
-                },
-                value: {
-                  description: "New value for the field",
-                },
-              },
-              required: ["field", "value"],
-            },
-          },
-          {
-            name: "unity_get_property",
-            description: "Get the value of a property from an object. Prefer handle over instance_id.",
-            inputSchema: {
-              type: "object",
-              properties: {
-                instance_id: {
-                  type: "number",
-                  description: "Instance ID of the object (legacy; either this or handle)",
-                },
-                handle: {
-                  type: "string",
-                  description: "Session-aware handle (session:id)",
-                },
-                type: {
-                  type: "string",
-                  description: "Full type name of the object",
-                },
-                property: {
-                  type: "string",
-                  description: "Name of the property",
-                },
-              },
-              required: ["property"],
-            },
-          },
-          {
-            name: "unity_set_property",
-            description: "Set the value of a property on an object. Session-bound handles are validated (stale handles fail fast).",
-            inputSchema: {
-              type: "object",
-              properties: {
-                instance_id: {
-                  type: "number",
-                  description: "Instance ID of the object (legacy; either this or handle)",
-                },
-                handle: {
-                  type: "string",
-                  description: "Session-aware handle (session:id); session is validated",
-                },
-                type: {
-                  type: "string",
-                  description: "Full type name of the object",
-                },
-                property: {
-                  type: "string",
-                  description: "Name of the property",
-                },
-                value: {
-                  description: "New value for the property",
-                },
-              },
-              required: ["property", "value"],
-            },
-          },
-          {
-            name: "unity_invoke_method",
-            description: "Invoke a method on an object. Session-bound handles are validated (stale handles fail fast).",
-            inputSchema: {
-              type: "object",
-              properties: {
-                instance_id: {
-                  type: "number",
-                  description: "Instance ID of the object (legacy; either this or handle)",
-                },
-                handle: {
-                  type: "string",
-                  description: "Session-aware handle (session:id); session is validated",
-                },
-                type: {
-                  type: "string",
-                  description: "Full type name of the object",
-                },
-                method: {
-                  type: "string",
-                  description: "Name of the method",
-                },
-                args: {
-                  type: "array",
-                  description: "Method arguments",
-                  items: {},
-                },
-              },
-              required: ["method"],
-            },
-          },
-          {
-            name: "unity_hierarchy",
-            description: "Get the hierarchy of GameObjects in the scene. Use name_contains/limit to keep output small.",
-            inputSchema: {
-              type: "object",
-              properties: {
-                max_depth: {
-                  type: "number",
-                  description: "Maximum depth to traverse",
-                  default: 10,
-                },
-                name_contains: {
-                  type: "string",
-                  description: "Keep only matching subtrees (ancestors of matches survive)",
-                },
-                limit: {
-                  type: "number",
-                  description: "Max nodes returned (response carries truncated flag when set)",
-                },
-              },
-              required: [],
-            },
-          },
-          {
-            name: "unity_execute_csharp",
-            description: "Execute C# code in the Unity runtime",
-            inputSchema: {
-              type: "object",
-              properties: {
-                code: {
-                  type: "string",
-                  description: "C# code to execute",
-                },
-                returnEncoding: {
-                  type: "string",
-                  description: "byte[] return encoding: hex (default) or base64",
-                },
-              },
-              required: ["code"],
-            },
-          },
-          {
-            name: "unity_list_assemblies",
-            description: "List loaded assemblies in the Unity runtime (optional substring filter). Pass limit/cursor for paging.",
-            inputSchema: {
-              type: "object",
-              properties: {
-                filter: {
-                  type: "string",
-                  description: "Optional case-insensitive substring filter on assembly name",
-                },
-                limit: {
-                  type: "number",
-                  description: "Max items per page (envelope with next_cursor when set)",
-                },
-                cursor: {
-                  type: "number",
-                  description: "Start offset for pagination",
-                },
-              },
-              required: [],
-            },
-          },
-          {
-            name: "unity_inspect_type",
-            description: "Inspect a type by full name: fields/properties/methods with static/instance, param and return types",
-            inputSchema: {
-              type: "object",
-              properties: {
-                type: {
-                  type: "string",
-                  description: "Full type name (e.g. System.Math)",
-                },
-                assembly: {
-                  type: "string",
-                  description: "Optional assembly name to resolve the type from",
-                },
-                member_limit: {
-                  type: "number",
-                  description: "Max members per list (default 200)",
-                },
-                member_contains: {
-                  type: "string",
-                  description: "Case-insensitive substring filter on member names",
-                },
-              },
-              required: ["type"],
-            },
-          },
-          {
-            name: "unity_invoke_static",
-            description: "Invoke a static method by type and method name; out/ref params are returned in outArgs, byte[] honours returnEncoding",
-            inputSchema: {
-              type: "object",
-              properties: {
-                type: {
-                  type: "string",
-                  description: "Full type name (e.g. System.Math)",
-                },
-                method: {
-                  type: "string",
-                  description: "Static method name",
-                },
-                args: {
-                  type: "array",
-                  description: "Method arguments (use null placeholders for out/ref params, or omit pure-out params)",
-                  items: {},
-                },
-                assembly: {
-                  type: "string",
-                  description: "Optional assembly name to resolve the type from",
-                },
-                returnEncoding: {
-                  type: "string",
-                  description: "byte[] encoding: hex (default) or base64",
-                },
-              },
-              required: ["type", "method"],
-            },
-          },
-          {
-            name: "unity_resolve_path",
-            description: "Re-resolve a Hierarchy path (e.g. Root/Child) to a fresh instance_id after scene changes or restarts",
-            inputSchema: {
-              type: "object",
-              properties: {
-                path: {
-                  type: "string",
-                  description: "Hierarchy path (e.g. Player/Arm)",
-                },
-              },
-              required: ["path"],
-            },
-          },
-          {
-            name: "unity_tail_log",
-            description: "Read the tail of BepInEx LogOutput.log without locking the game (Windows shared-read)",
-            inputSchema: {
-              type: "object",
-              properties: {
-                path: {
-                  type: "string",
-                  description: "Game root dir or full log path (default auto-detects)",
-                },
-                lines: {
-                  type: "number",
-                  description: "Number of tail lines (default 100, max 2000)",
-                },
-                keyword: {
-                  type: "string",
-                  description: "Optional case-insensitive keyword filter",
-                },
-              },
-              required: [],
-            },
-          },
-          {
-            name: "unity_capabilities",
-            description: "Discover the live runtime backend (IL2CPP/Mono), session, enabled tools, limits and marshalling support. Call this first.",
-            inputSchema: {
-              type: "object",
-              properties: {},
-              required: [],
-            },
-          },
-          {
-            name: "unity_search_members",
-            description: "Search fields/properties/methods across loaded assemblies by name. Returns assembly/type/member/signature.",
-            inputSchema: {
-              type: "object",
-              properties: {
-                name_contains: {
-                  type: "string",
-                  description: "Substring to search for in member names (required)",
-                },
-                type_filter: {
-                  type: "string",
-                  description: "Optional substring filter on type full names",
-                },
-                member_kind: {
-                  type: "string",
-                  description: "method, field, property or all (default all)",
-                },
-                assembly_filter: {
-                  type: "string",
-                  description: "Optional substring filter on assembly names",
-                },
-                limit: {
-                  type: "number",
-                  description: "Max results (default 50)",
-                },
-                cursor: {
-                  type: "number",
-                  description: "Start offset for pagination",
-                },
-              },
-              required: ["name_contains"],
-            },
-          },
-          {
-            name: "unity_find_objects_of_type",
-            description: "Find live instances of a type by full name (singletons, managers, controllers). Returns handles.",
-            inputSchema: {
-              type: "object",
-              properties: {
-                type: {
-                  type: "string",
-                  description: "Full type name (e.g. Game.SomeManager)",
-                },
-                assembly: {
-                  type: "string",
-                  description: "Optional assembly name to resolve the type from",
-                },
-                limit: {
-                  type: "number",
-                  description: "Max results (default 100)",
-                },
-                cursor: {
-                  type: "number",
-                  description: "Start offset for pagination",
-                },
-              },
-              required: ["type"],
-            },
-          },
-          {
-            name: "unity_get_static",
-            description: "Read a static field or property by type and member name.",
-            inputSchema: {
-              type: "object",
-              properties: {
-                type: {
-                  type: "string",
-                  description: "Full type name",
-                },
-                member: {
-                  type: "string",
-                  description: "Static field or property name",
-                },
-                assembly: {
-                  type: "string",
-                  description: "Optional assembly name to resolve the type from",
-                },
-                returnEncoding: {
-                  type: "string",
-                  description: "byte[] encoding: hex (default) or base64",
-                },
-              },
-              required: ["type", "member"],
-            },
-          },
-          {
-            name: "unity_set_static",
-            description: "Write a static field or property by type and member name.",
-            inputSchema: {
-              type: "object",
-              properties: {
-                type: {
-                  type: "string",
-                  description: "Full type name",
-                },
-                member: {
-                  type: "string",
-                  description: "Static field or property name",
-                },
-                value: {
-                  description: "New value",
-                },
-                assembly: {
-                  type: "string",
-                  description: "Optional assembly name to resolve the type from",
-                },
-              },
-              required: ["type", "member", "value"],
-            },
-          },
-          {
-            name: "unity_list_hooks",
-            description: "List Harmony-patched methods in the runtime (read-only inventory: method + patch owners).",
-            inputSchema: {
-              type: "object",
-              properties: {
-                limit: {
-                  type: "number",
-                  description: "Max results (default 100)",
-                },
-                cursor: {
-                  type: "number",
-                  description: "Start offset for pagination",
-                },
-              },
-              required: [],
-            },
-          },
-        ],
-      };
-    });
-
-    // Handle tool calls. Nothing may throw out of this handler: the host turns any
-    // escaped error into the opaque "-32603 MCP tool invocation did not complete".
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      try {
-        return await this.dispatchTool(request.params.name, request.params.arguments as any);
-      } catch (error: any) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `ERROR: ${error?.message ?? String(error)}\n${error?.stack ?? ""}`,
-            },
-          ],
-          isError: true,
-        };
-      }
-    });
-  }
-
-  private async dispatchTool(name: string, args: any): Promise<any> {
-    // unity_tail_log is served locally from disk; works even when the game is down.
-    if (name === "unity_tail_log") {
-      const logResult = await tailLog({
-        path: args?.path as string | undefined,
-        lines: (args?.lines as number | undefined) ?? 100,
-        keyword: args?.keyword as string | undefined,
-      });
-      return {
-        content: [{ type: "text", text: serializeResult(logResult) }],
-      };
-    }
-
-    // Ensure bridge is connected
-    if (!this.bridge.isConnected()) {
-      const connected = await this.bridge.ping();
-      if (!connected) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "Error: Cannot connect to Unity Bridge. Make sure UnityExplorer MCP Bridge is running in Unity.",
-            },
-          ],
-          isError: true,
-        };
-      }
-    }
-
-    let result: any;
-
-    switch (name) {
-          case "unity_ping":
-            result = await this.bridge.request("ping");
-            break;
-
-          case "unity_scene_info":
-            result = await this.bridge.request("scene_info");
-            break;
-
-          case "unity_find_gameobjects":
-            result = await this.bridge.request("find_gameobjects", {
-              name: args?.name,
-              include_inactive: args?.include_inactive ?? true,
-              limit: args?.limit,
-              cursor: args?.cursor,
-              name_contains: args?.name_contains,
-            });
-            break;
-
-          case "unity_get_gameobject":
-            result = await this.bridge.request("get_gameobject", {
-              instance_id: args?.instance_id,
-              handle: args?.handle,
-            });
-            break;
-
-          case "unity_get_components":
-            result = await this.bridge.request("get_components", {
-              instance_id: args?.instance_id,
-              handle: args?.handle,
-            });
-            break;
-
-          case "unity_inspect":
-            result = await this.bridge.request("inspect", {
-              instance_id: args?.instance_id,
-              handle: args?.handle,
-              type_name: args?.type_name,
-              member_limit: args?.member_limit,
-            });
-            break;
-
-          case "unity_get_field":
-            result = await this.bridge.request("get_field", {
-              instance_id: args?.instance_id,
-              handle: args?.handle,
-              type: args?.type,
-              field: args?.field,
-            });
-            break;
-
-          case "unity_set_field":
-            result = await this.bridge.request("set_field", {
-              instance_id: args?.instance_id,
-              handle: args?.handle,
-              type: args?.type,
-              field: args?.field,
-              value: args?.value,
-            });
-            break;
-
-          case "unity_get_property":
-            result = await this.bridge.request("get_property", {
-              instance_id: args?.instance_id,
-              handle: args?.handle,
-              type: args?.type,
-              property: args?.property,
-            });
-            break;
-
-          case "unity_set_property":
-            result = await this.bridge.request("set_property", {
-              instance_id: args?.instance_id,
-              handle: args?.handle,
-              type: args?.type,
-              property: args?.property,
-              value: args?.value,
-            });
-            break;
-
-          case "unity_invoke_method":
-            result = await this.bridge.request("invoke_method", {
-              instance_id: args?.instance_id,
-              handle: args?.handle,
-              type: args?.type,
-              method: args?.method,
-              args: args?.args,
-            });
-            break;
-
-          case "unity_hierarchy":
-            result = await this.bridge.request("hierarchy", {
-              max_depth: args?.max_depth ?? 10,
-              name_contains: args?.name_contains,
-              limit: args?.limit,
-            });
-            break;
-
-          case "unity_execute_csharp":
-            result = await this.bridge.request("execute_csharp", {
-              code: args?.code,
-              returnEncoding: (args as any)?.returnEncoding ?? "hex",
-            });
-            break;
-
-          case "unity_list_assemblies":
-            result = await this.bridge.request("list_assemblies", {
-              filter: args?.filter,
-              limit: args?.limit,
-              cursor: args?.cursor,
-            });
-            break;
-
-          case "unity_inspect_type":
-            result = await this.bridge.request("inspect_type", {
-              type: args?.type,
-              assembly: args?.assembly,
-              member_limit: args?.member_limit,
-              member_contains: args?.member_contains,
-            });
-            break;
-
-          case "unity_invoke_static":
-            result = await this.bridge.request("invoke_static", {
-              type: args?.type,
-              assembly: (args as any)?.assembly,
-              method: args?.method,
-              args: args?.args,
-              returnEncoding: (args as any)?.returnEncoding ?? "hex",
-            });
-            break;
-
-          case "unity_resolve_path":
-            result = await this.bridge.request("resolve_path", {
-              path: args?.path,
-            });
-            break;
-
-          case "unity_capabilities":
-            result = await this.bridge.request("capabilities");
-            break;
-
-          case "unity_search_members":
-            result = await this.bridge.request("search_members", {
-              name_contains: args?.name_contains,
-              type_filter: (args as any)?.type_filter,
-              member_kind: (args as any)?.member_kind,
-              assembly_filter: (args as any)?.assembly_filter,
-              limit: args?.limit,
-              cursor: args?.cursor,
-            });
-            break;
-
-          case "unity_find_objects_of_type":
-            result = await this.bridge.request("find_objects_of_type", {
-              type: args?.type,
-              assembly: (args as any)?.assembly,
-              limit: args?.limit,
-              cursor: args?.cursor,
-            });
-            break;
-
-          case "unity_get_static":
-            result = await this.bridge.request("get_static", {
-              type: args?.type,
-              member: (args as any)?.member,
-              assembly: (args as any)?.assembly,
-              returnEncoding: (args as any)?.returnEncoding ?? "hex",
-            });
-            break;
-
-          case "unity_set_static":
-            result = await this.bridge.request("set_static", {
-              type: args?.type,
-              member: (args as any)?.member,
-              value: (args as any)?.value,
-              assembly: (args as any)?.assembly,
-            });
-            break;
-
-          case "unity_list_hooks":
-            result = await this.bridge.request("list_hooks", {
-              limit: args?.limit,
-              cursor: args?.cursor,
-            });
-            break;
-
-          default:
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Error: Unknown tool: ${name}`,
-                },
-              ],
-              isError: true,
-            };
-        }
-
-        const text = serializeResult(result);
-    // Bridge-reported failures (e.g. a C# compile error with compilerOutput in Data)
-    // still ship their payload, but flag the call so the caller sees it as an error.
-    const failed = result && typeof result === "object" && (result as any).Success === false;
+  if (name === "unity_list_bridges") {
+    const bridges = await connectors.list();
     return {
-      content: [{ type: "text", text }],
-      ...(failed ? { isError: true } : {}),
+      content: [
+        {
+          type: "text",
+          text: renderResult({ bridges, selected: connectors.selected }),
+        },
+      ],
     };
   }
 
-  async run() {
-    // Check initial connection
-    const connected = await this.bridge.ping();
-    if (connected) {
-      console.error("Connected to Unity Bridge");
-    } else {
-      console.error("Warning: Cannot connect to Unity Bridge. Will retry when tools are called.");
+  if (name === "unity_select_bridge") {
+    try {
+      const selected = await connectors.select(args?.pid, args?.port);
+      return {
+        content: [
+          { type: "text", text: renderResult({ ok: true, selected }) },
+        ],
+      };
+    } catch (error: any) {
+      return bridgeError(error?.message ?? String(error));
     }
-
-    const transport = new StdioServerTransport();
-    await this.server.connect(transport);
-    console.error("Unity Explorer MCP Server running on stdio");
   }
+
+  if (name === "unity_batch") {
+    return runBatch(args);
+  }
+
+  if (!TOOL_NAMES.has(name)) return bridgeError(`Unknown tool: ${name}`);
+  const route = BRIDGE_ROUTES[name];
+  if (!route) return bridgeError(`Tool has no bridge route: ${name}`);
+
+  const offline = await ensureConnection();
+  if (offline) return offline;
+
+  const { method, params } = route(args ?? {});
+  const call = await bridgeCall(method, params);
+
+  if (name === "unity_capture_screenshot") {
+    const data = call.envelope?.Data ?? call.envelope?.data;
+    if (!call.failed && data?.base64) {
+      return {
+        content: [
+          { type: "text", text: stringifySummary(call.envelope) },
+          {
+            type: "image",
+            data: data.base64,
+            mimeType: data.mime_type ?? "image/png",
+          },
+        ],
+      };
+    }
+  }
+
+  return {
+    content: [{ type: "text", text: call.text }],
+    ...(call.failed ? { isError: true } : {}),
+  };
 }
 
-// Main
-const server = new UnityExplorerMCPServer();
-server.run().catch(console.error);
+async function runBatch(args: any): Promise<ToolResult> {
+  const calls = Array.isArray(args?.calls) ? args.calls : [];
+  if (calls.length === 0) return bridgeError("batch needs at least one call");
+  if (calls.length > 10) return bridgeError("batch accepts at most 10 calls");
+
+  const offline = await ensureConnection();
+  if (offline) return offline;
+
+  const results: any[] = [];
+  let used = 0;
+  for (let i = 0; i < calls.length; i++) {
+    const call = calls[i] ?? {};
+    const tool = String(call.tool ?? "");
+    if (!BATCH_ALLOWED.has(tool)) {
+      results.push({
+        tool,
+        ok: false,
+        error: {
+          code: "BATCH_TOOL_NOT_ALLOWED",
+          message: `${tool} is not a read-only batch tool`,
+        },
+      });
+      continue;
+    }
+    if (used >= BATCH_BUDGET) {
+      results.push({
+        tool,
+        ok: false,
+        error: { code: "BATCH_BUDGET_EXHAUSTED" },
+      });
+      continue;
+    }
+
+    let entry: any;
+    if (tool === "unity_tail_log") {
+      try {
+        const logResult = await tailLog({
+          path: call.arguments?.path,
+          lines: call.arguments?.lines ?? 100,
+          keyword: call.arguments?.keyword,
+        });
+        entry = { print: JSON.stringify(logResult, null, 2), result: logResult };
+      } catch (error: any) {
+        entry = { error: { code: "TAIL_LOG_FAILED", message: error?.message } };
+      }
+    } else {
+      const route = BRIDGE_ROUTES[tool];
+      const { method, params } = route(call.arguments ?? {});
+      const envelope = await connectors.request(method, params);
+      if (envelope?.Success === false) {
+        entry = {
+          error: {
+            code: envelope?.Data?.code ?? "BRIDGE_ERROR",
+            message: envelope?.Error ?? "bridge call failed",
+            data: envelope?.Data,
+          },
+        };
+      } else {
+        entry = { result: envelope?.Data ?? envelope?.data };
+      }
+    }
+
+    const serialized = JSON.stringify(entry);
+    if (used + serialized.length > BATCH_BUDGET) {
+      results.push({
+        tool,
+        ok: false,
+        error: { code: "BATCH_BUDGET_EXHAUSTED" },
+      });
+      continue;
+    }
+    used += serialized.length;
+    results.push(
+      entry.error
+        ? { tool, ok: false, error: entry.error }
+        : { tool, ok: true, result: entry.result }
+    );
+  }
+
+  return {
+    content: [
+      {
+        type: "text",
+        text: renderResult({ results, bytes: used }, BATCH_BUDGET),
+      },
+    ],
+  };
+}
+
+function buildServer(): Server {
+  const server = new Server(
+    { name: "unity-explorer-mcp-server", version: VERSION },
+    { capabilities: { tools: {} } }
+  );
+
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: TOOL_DEFS,
+  }));
+
+  server.setRequestHandler(CallToolRequestSchema, async (request): Promise<any> => {
+    try {
+      return await runTool(request.params.name, request.params.arguments ?? {});
+    } catch (error: any) {
+      // Nothing may escape: the host would turn it into an opaque -32603.
+      return {
+        content: [
+          {
+            type: "text",
+            text: `ERROR: ${error?.message ?? String(error)}\n${
+              error?.stack ?? ""
+            }`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  });
+
+  return server;
+}
+
+function parseFlag(flag: string): string | undefined {
+  const index = process.argv.indexOf(flag);
+  return index >= 0 ? process.argv[index + 1] : undefined;
+}
+
+async function runStdio(): Promise<void> {
+  const connected = await connectors.ping().catch(() => false);
+  console.error(
+    connected
+      ? "Connected to a Unity bridge"
+      : "Warning: no Unity bridge yet; tools retry on call"
+  );
+  const server = buildServer();
+  await server.connect(new StdioServerTransport());
+  console.error(`Unity Explorer MCP ${VERSION} running on stdio`);
+}
+
+async function readJsonBody(req: any, limit = 20 * 1024 * 1024): Promise<any> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > limit) throw new Error("request body too large");
+    chunks.push(Buffer.from(chunk));
+  }
+  if (chunks.length === 0) return undefined;
+  const text = Buffer.concat(chunks).toString("utf8").trim();
+  if (!text) return undefined;
+  return JSON.parse(text);
+}
+
+async function runHttp(host: string, port: number): Promise<void> {
+  const http = createHttpServer(async (req, res) => {
+    if (req.method === "GET" && (req.url === "/" || req.url === "/health")) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          status: "ok",
+          transport: "streamable-http",
+          version: VERSION,
+          bridge: connectors.selected,
+        })
+      );
+      return;
+    }
+    if (req.url !== "/mcp") {
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      res.end("not found");
+      return;
+    }
+    if (req.method !== "POST") {
+      res.writeHead(405, { "Content-Type": "text/plain" });
+      res.end("stateless mode accepts POST only");
+      return;
+    }
+
+    try {
+      const body = await readJsonBody(req);
+      const server = buildServer();
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined,
+      });
+      res.on("close", () => {
+        void transport.close();
+        void server.close();
+      });
+      await server.connect(transport);
+      await transport.handleRequest(req, res, body);
+    } catch (error: any) {
+      if (!res.headersSent) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+      }
+      res.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          error: { code: -32700, message: error?.message ?? "bad request" },
+          id: null,
+        })
+      );
+    }
+  });
+
+  await new Promise<void>((resolve) => http.listen(port, host, resolve));
+  console.error(
+    `Unity Explorer MCP ${VERSION} listening on http://${host}:${port}/mcp`
+  );
+}
+
+async function main(): Promise<void> {
+  if (process.argv.includes("--help")) {
+    console.log(`unity-explorer-mcp-server ${VERSION}
+
+  node dist/server.js [--transport stdio|http] [--host 127.0.0.1] [--port 8765]
+
+Environment:
+  UNITY_BRIDGE_URL        explicit bridge URL (wins over discovery)
+  UNITY_BRIDGE_PID        select a discovered bridge by pid
+  UNITY_BRIDGE_TIMEOUT    bridge request timeout in ms (default 120000)
+  UNITY_MCP_MAX_BYTES     hard cap on tool-result text
+  UNITY_RESULT_BUDGET     model-facing result budget (default 120000)
+  UNITY_RESULT_TABLES     set 0 to disable {cols, rows} tables
+  UNITY_BATCH_BUDGET      batch result budget (default 28000)
+  UNITY_DISCOVERY_DIR     bridge discovery directory
+  UNITY_MCP_TRANSPORT     stdio (default) or http
+  UNITY_MCP_HTTP_PORT     HTTP port (default 8765)
+`);
+    return;
+  }
+
+  const mode =
+    parseFlag("--transport") ?? process.env.UNITY_MCP_TRANSPORT ?? "stdio";
+  if (mode === "http") {
+    const host =
+      parseFlag("--host") ?? process.env.UNITY_MCP_HTTP_HOST ?? "127.0.0.1";
+    const port = positiveInt(
+      parseFlag("--port") ?? process.env.UNITY_MCP_HTTP_PORT,
+      8765
+    );
+    await runHttp(host, port);
+    return;
+  }
+  await runStdio();
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

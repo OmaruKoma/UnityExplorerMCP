@@ -18,7 +18,7 @@ using System.Text.Json;
 
 namespace UnityExplorer.MCPBridge
 {
-    public class MCPBridge : MonoBehaviour
+    public partial class MCPBridge : MonoBehaviour
     {
         public static MCPBridge Instance { get; private set; }
         
@@ -40,7 +40,14 @@ namespace UnityExplorer.MCPBridge
             "get_property", "set_property", "invoke_method", "hierarchy",
             "execute_csharp", "list_assemblies", "inspect_type", "invoke_static",
             "resolve_path", "capabilities", "search_members", "find_objects_of_type",
-            "get_static", "set_static", "list_hooks"
+            "get_static", "set_static", "list_hooks",
+            "snapshot_object", "diff_snapshot", "undo_write",
+            "start_instance_scan", "get_instance_scan", "search_values",
+            "read_array", "decode_byte_array",
+            "set_label", "remove_label", "list_labels",
+            "start_method_trace", "stop_method_trace", "clear_method_trace",
+            "list_method_traces", "get_method_trace", "build_call_graph",
+            "capture_screenshot", "activity_log"
         };
 
         // Handle stabilization: instance_ids are process-local and die on
@@ -104,30 +111,37 @@ namespace UnityExplorer.MCPBridge
         internal void Update()
         {
             ProcessQueue();
+            ScanJobs.Tick();
         }
         
         public void StartServer()
         {
             try
             {
-                int port = 12345;
-                try
+                int startPort = BridgeConfig.PreferredPort;
+                for (int offset = 0; offset <= BridgeConfig.PortSpan; offset++)
                 {
-                    string raw = Environment.GetEnvironmentVariable("MCP_BRIDGE_PORT");
-                    int parsed;
-                    if (!string.IsNullOrEmpty(raw) && int.TryParse(raw, out parsed)
-                        && parsed > 0 && parsed < 65536) port = parsed;
+                    int candidate = startPort + offset;
+                    try
+                    {
+                        var listener = new TcpListener(IPAddress.Loopback, candidate);
+                        listener.Start();
+                        _tcpListener = listener;
+                        Port = candidate;
+                        break;
+                    }
+                    catch { }
                 }
-                catch { }
-                Port = port;
-                _tcpListener = new TcpListener(IPAddress.Loopback, Port);
-                _tcpListener.Start();
+                if (_tcpListener == null)
+                    throw new Exception("No free loopback port in range " + startPort
+                        + "-" + (startPort + BridgeConfig.PortSpan));
                 
                 _isRunning = true;
                 _listenerThread = new Thread(ListenLoop);
                 _listenerThread.IsBackground = true;
                 _listenerThread.Start();
                 
+                BridgeDiscovery.Publish(Port);
                 Debug.Log("[MCPBridge] Started on port " + Port);
             }
             catch (Exception ex)
@@ -139,6 +153,7 @@ namespace UnityExplorer.MCPBridge
         public void StopServer()
         {
             _isRunning = false;
+            BridgeDiscovery.Unpublish();
             
             try
             {
@@ -298,8 +313,22 @@ namespace UnityExplorer.MCPBridge
                     return System.Text.Json.JsonSerializer.Serialize(new MCPResponse { Success = false, Error = "Invalid request" });
                 }
                 
-                MCPResponse response;
                 string method = request.Method != null ? request.Method.ToLower() : "";
+
+                string denied = BridgePermissions.Capability(method);
+                if (denied != null)
+                {
+                    return System.Text.Json.JsonSerializer.Serialize(new MCPResponse
+                    {
+                        Success = false,
+                        Data = BridgePermissions.DeniedData(denied),
+                        Error = "Permission denied: '" + denied + "' is disabled in this game's bridge config."
+                    });
+                }
+
+                MCPResponse response;
+                bool mutating = BridgePermissions.IsMutating(method);
+                long startedTicks = mutating ? DateTime.UtcNow.Ticks : 0;
                 
                 switch (method)
                 {
@@ -326,7 +355,34 @@ namespace UnityExplorer.MCPBridge
                     case "get_static": response = HandleGetStatic(request); break;
                     case "set_static": response = HandleSetStatic(request); break;
                     case "list_hooks": response = HandleListHooks(request); break;
+                    case "snapshot_object": response = HandleSnapshotObject(request); break;
+                    case "diff_snapshot": response = HandleDiffSnapshot(request); break;
+                    case "undo_write": response = HandleUndoWrite(request); break;
+                    case "start_instance_scan": response = HandleStartInstanceScan(request); break;
+                    case "get_instance_scan": response = HandleGetInstanceScan(request); break;
+                    case "search_values": response = HandleSearchValues(request); break;
+                    case "read_array": response = HandleReadArray(request); break;
+                    case "decode_byte_array": response = HandleDecodeByteArray(request); break;
+                    case "set_label": response = HandleSetLabel(request); break;
+                    case "remove_label": response = HandleRemoveLabel(request); break;
+                    case "list_labels": response = HandleListLabels(request); break;
+                    case "start_method_trace": response = HandleStartMethodTrace(request); break;
+                    case "stop_method_trace": response = HandleStopMethodTrace(request); break;
+                    case "clear_method_trace": response = HandleClearMethodTrace(request); break;
+                    case "list_method_traces": response = HandleListMethodTraces(request); break;
+                    case "get_method_trace": response = HandleGetMethodTrace(request); break;
+                    case "build_call_graph": response = HandleBuildCallGraph(request); break;
+                    case "capture_screenshot": response = HandleCaptureScreenshot(request); break;
+                    case "activity_log": response = HandleActivityLog(request); break;
                     default: response = new MCPResponse { Success = false, Error = "Unknown: " + request.Method }; break;
+                }
+
+                if (mutating)
+                {
+                    long elapsed = (DateTime.UtcNow.Ticks - startedTicks) / TimeSpan.TicksPerMillisecond;
+                    AuditLog.Record(method, AuditLog.DescribeRequest(request, method),
+                        response != null && response.Success, elapsed,
+                        response != null && response.Success ? "ok" : (response != null ? response.Error : "failed"));
                 }
                 
                 return System.Text.Json.JsonSerializer.Serialize(response);
@@ -353,8 +409,12 @@ namespace UnityExplorer.MCPBridge
                 {
                     Status = "ok",
                     UnityVersion = Application.unityVersion,
-                    BridgeVersion = "1.2.0",
-                    SessionId = SessionId
+                    BridgeVersion = "1.3.0",
+                    SessionId = SessionId,
+                    Pid = SafePid(),
+                    Port = Port,
+                    Backend = BridgeConfig.Backend,
+                    Loader = "BepInEx"
                 }
             };
         }
@@ -465,6 +525,8 @@ namespace UnityExplorer.MCPBridge
         
         private MCPResponse HandleGetGameObject(MCPRequest request)
         {
+            MCPResponse stale = ValidateReadHandle(request);
+            if (stale != null) return stale;
             int instanceId = ExtractInstanceId(request);
             
             var obj = FindObjectById(instanceId) as GameObject;
@@ -517,6 +579,8 @@ namespace UnityExplorer.MCPBridge
         
         private MCPResponse HandleGetComponents(MCPRequest request)
         {
+            MCPResponse stale = ValidateReadHandle(request);
+            if (stale != null) return stale;
             int instanceId = ExtractInstanceId(request);
             
             var obj = FindObjectById(instanceId) as GameObject;
@@ -663,7 +727,7 @@ components.Add(new ComponentInfo
 #endif
                 {
                     // Mono backend (or non-Component on IL2CPP): managed reflection.
-                    var type = obj.GetType();
+                    var type = ConcreteType(obj);
                     info.TypeName = type.FullName;
                     BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static;
                     
@@ -738,6 +802,8 @@ components.Add(new ComponentInfo
 #endif
         private MCPResponse HandleGetField(MCPRequest request)
         {
+            MCPResponse stale = ValidateReadHandle(request);
+            if (stale != null) return stale;
             int instanceId = ExtractInstanceId(request);
             string fieldName = ExtractString(request, "field") ?? ExtractString(request, "Field");
             
@@ -745,17 +811,26 @@ components.Add(new ComponentInfo
             if (obj == null)
                 return new MCPResponse { Success = false, Error = StaleHandleError(instanceId) };
             
-            var type = obj.GetType();
-            var field = type.GetField(fieldName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static);
-            if (field == null)
-                return new MCPResponse { Success = false, Error = "Field not found: " + fieldName };
-            
-            try
+            var type = ConcreteType(obj);
+            // Il2CppInterop exposes native private fields as properties, so a
+            // missing field falls through to member resolution instead.
+            object value;
+            Type valueType;
+            bool isStatic;
+            bool isProperty;
+            string error;
+            if (!MemberTools.TryRead(type, obj, fieldName, out value, out valueType, out isStatic, out isProperty, out error))
+                return new MCPResponse { Success = false, Error = error };
+            return new MCPResponse
             {
-                object value = field.GetValue(field.IsStatic ? null : obj);
-                return new MCPResponse { Success = true, Data = new FieldValueResponse { FieldName = field.Name, TypeName = field.FieldType.FullName, Value = value != null ? value.ToString() : "null" } };
-            }
-            catch (Exception ex) { return new MCPResponse { Success = false, Error = ex.Message }; }
+                Success = true,
+                Data = new FieldValueResponse
+                {
+                    FieldName = fieldName,
+                    TypeName = valueType != null ? valueType.FullName : null,
+                    Value = value != null ? value.ToString() : "null"
+                }
+            };
         }
         
         private MCPResponse HandleSetField(MCPRequest request)
@@ -770,22 +845,47 @@ components.Add(new ComponentInfo
             if (obj == null)
                 return new MCPResponse { Success = false, Error = StaleHandleError(instanceId) };
             
-            var type = obj.GetType();
-            var field = type.GetField(fieldName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static);
-            if (field == null)
-                return new MCPResponse { Success = false, Error = "Field not found: " + fieldName };
-            
+            var type = ConcreteType(obj);
+            FieldInfo field;
+            PropertyInfo prop;
+            string resolveError;
+            if (!MemberTools.TryResolveMember(type, fieldName, out field, out prop, out resolveError))
+                return new MCPResponse { Success = false, Error = resolveError };
+
             try
             {
-                object value = ConvertValue(valueObj, field.FieldType);
-                field.SetValue(field.IsStatic ? null : obj, value);
-                return new MCPResponse { Success = true, Data = new { FieldName = field.Name, NewValue = value != null ? value.ToString() : "null" } };
+                if (field != null)
+                {
+                    object oldValue = null;
+                    try { oldValue = field.GetValue(field.IsStatic ? null : obj); } catch { }
+                    object value = ConvertValue(valueObj, field.FieldType);
+                    field.SetValue(field.IsStatic ? null : obj, value);
+                    RecordUndo(field.IsStatic ? "static_field" : "field",
+                        field.IsStatic ? 0 : instanceId,
+                        (field.DeclaringType ?? type).FullName, field.Name, field.FieldType, oldValue);
+                    return new MCPResponse { Success = true, Data = new { FieldName = field.Name, NewValue = value != null ? value.ToString() : "null" } };
+                }
+
+                if (!prop.CanWrite)
+                    return new MCPResponse { Success = false, Error = "Property not writable: " + prop.Name };
+                MethodInfo setter = prop.GetSetMethod(true);
+                bool propIsStatic = setter != null && setter.IsStatic;
+                object propOldValue = null;
+                try { propOldValue = prop.GetValue(propIsStatic ? null : obj, null); } catch { }
+                object propValue = ConvertValue(valueObj, prop.PropertyType);
+                prop.SetValue(propIsStatic ? null : obj, propValue, null);
+                RecordUndo(propIsStatic ? "static_property" : "property",
+                    propIsStatic ? 0 : instanceId,
+                    (prop.DeclaringType ?? type).FullName, prop.Name, prop.PropertyType, propOldValue);
+                return new MCPResponse { Success = true, Data = new { FieldName = prop.Name, NewValue = propValue != null ? propValue.ToString() : "null" } };
             }
             catch (Exception ex) { return new MCPResponse { Success = false, Error = ex.Message }; }
         }
         
         private MCPResponse HandleGetProperty(MCPRequest request)
         {
+            MCPResponse stale = ValidateReadHandle(request);
+            if (stale != null) return stale;
             int instanceId = ExtractInstanceId(request);
             string propertyName = ExtractString(request, "property") ?? ExtractString(request, "Property");
             
@@ -793,8 +893,8 @@ components.Add(new ComponentInfo
             if (obj == null)
                 return new MCPResponse { Success = false, Error = StaleHandleError(instanceId) };
             
-            var type = obj.GetType();
-            var prop = type.GetProperty(propertyName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static);
+            var type = ConcreteType(obj);
+            var prop = MemberTools.FindProperty(type, propertyName);
             if (prop == null)
                 return new MCPResponse { Success = false, Error = "Property not found: " + propertyName };
             if (!prop.CanRead)
@@ -821,8 +921,8 @@ components.Add(new ComponentInfo
             if (obj == null)
                 return new MCPResponse { Success = false, Error = StaleHandleError(instanceId) };
             
-            var type = obj.GetType();
-            var prop = type.GetProperty(propertyName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static);
+            var type = ConcreteType(obj);
+            var prop = MemberTools.FindProperty(type, propertyName);
             if (prop == null)
                 return new MCPResponse { Success = false, Error = "Property not found: " + propertyName };
             if (!prop.CanWrite)
@@ -830,8 +930,14 @@ components.Add(new ComponentInfo
             
             try
             {
+                bool isStatic = prop.GetAccessors(true)[0].IsStatic;
+                object oldValue = null;
+                try { oldValue = prop.GetValue(isStatic ? null : obj, null); } catch { }
                 object value = ConvertValue(valueObj, prop.PropertyType);
-                prop.SetValue(prop.GetAccessors(true)[0].IsStatic ? null : obj, value, null);
+                prop.SetValue(isStatic ? null : obj, value, null);
+                RecordUndo(isStatic ? "static_property" : "property",
+                    isStatic ? 0 : instanceId,
+                    (prop.DeclaringType ?? type).FullName, prop.Name, prop.PropertyType, oldValue);
                 return new MCPResponse { Success = true, Data = new { PropertyName = prop.Name, NewValue = value != null ? value.ToString() : "null" } };
             }
             catch (Exception ex) { return new MCPResponse { Success = false, Error = ex.Message }; }
@@ -881,7 +987,7 @@ components.Add(new ComponentInfo
 #endif
             
             Type type = null;
-            if (obj != null) type = obj.GetType();
+            if (obj != null) type = ConcreteType(obj);
             else if (!string.IsNullOrEmpty(typeName)) type = AssemblyInspector.ResolveType(null, typeName);
 
             if (type == null)
@@ -1204,9 +1310,25 @@ components.Add(new ComponentInfo
                     { "backend", BridgeConfig.Backend },
                     { "loader", "BepInEx" },
                     { "bepinex_version", bepinExVersion ?? "unknown" },
-                    { "bridge_version", "1.2.0" },
+                    { "bridge_version", "1.3.0" },
                     { "unity_version", Application.unityVersion },
                     { "session_id", SessionId },
+                    { "pid", SafePid() },
+                    { "port", Port },
+                    { "permissions", BridgeConfig.Permissions() },
+                    { "features", new Dictionary<string, object>
+                        {
+                            { "snapshots", true },
+                            { "undo", true },
+                            { "instance_scan", true },
+                            { "search_values", true },
+                            { "arrays", true },
+                            { "labels", true },
+                            { "method_trace", MethodTracer.Available },
+                            { "screenshot", true },
+                            { "batch", true }
+                        }
+                    },
                     { "enabled_tools", new List<string>(EnabledTools) },
                     { "limits", new Dictionary<string, object>
                         {
@@ -1311,8 +1433,11 @@ components.Add(new ComponentInfo
                 return false;
             }
             const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static;
-            field = type.GetField(member, flags);
-            if (field == null) prop = type.GetProperty(member, flags);
+            for (Type t = type; t != null && field == null && prop == null; t = t.BaseType)
+            {
+                field = t.GetField(member, flags | BindingFlags.DeclaredOnly);
+                if (field == null) prop = t.GetProperty(member, flags | BindingFlags.DeclaredOnly);
+            }
             if (field == null && prop == null)
             {
                 error = "Static field/property not found: " + type.FullName + "." + member;
@@ -1396,10 +1521,14 @@ components.Add(new ComponentInfo
                 {
                     if (field.IsLiteral && !field.IsInitOnly)
                         return new MCPResponse { Success = false, Error = "Field is const and cannot be written: " + field.Name };
+                    object oldValue = null;
+                    try { oldValue = field.GetValue(null); } catch { }
                     object converted = hasEl
                         ? ValueSerializer.ConvertJsonElement(rawEl, field.FieldType)
                         : ConvertValue(rawValue, field.FieldType);
                     field.SetValue(null, converted);
+                    RecordUndo("static_field", 0, (field.DeclaringType ?? type).FullName,
+                        field.Name, field.FieldType, oldValue);
                     return new MCPResponse
                     {
                         Success = true,
@@ -1413,10 +1542,14 @@ components.Add(new ComponentInfo
                 }
                 if (!prop.CanWrite)
                     return new MCPResponse { Success = false, Error = "Property not writable: " + prop.Name };
+                object oldPropValue = null;
+                try { oldPropValue = prop.GetValue(null, null); } catch { }
                 object pconverted = hasEl
                     ? ValueSerializer.ConvertJsonElement(rawEl, prop.PropertyType)
                     : ConvertValue(rawValue, prop.PropertyType);
                 prop.SetValue(null, pconverted, null);
+                RecordUndo("static_property", 0, (prop.DeclaringType ?? type).FullName,
+                    prop.Name, prop.PropertyType, oldPropValue);
                 return new MCPResponse
                 {
                     Success = true,
@@ -1590,6 +1723,16 @@ components.Add(new ComponentInfo
                     }
                     catch { }
                 }
+                System.Text.Json.JsonElement ip;
+                if (j.TryGetProperty("instance_id", out ip) || j.TryGetProperty("InstanceId", out ip))
+                {
+                    try
+                    {
+                        if (ip.ValueKind == System.Text.Json.JsonValueKind.String)
+                            return ip.GetString();
+                    }
+                    catch { }
+                }
             }
             return null;
         }
@@ -1600,6 +1743,20 @@ components.Add(new ComponentInfo
         /// no object scan), otherwise null.
         /// </summary>
         private MCPResponse ValidateWriteHandle(MCPRequest request)
+        {
+            return ValidateHandleSession(request);
+        }
+
+        /// <summary>
+        /// Same check for read paths: a stale session handle would otherwise
+        /// resolve to an unrelated live object that reused the numeric id.
+        /// </summary>
+        private MCPResponse ValidateReadHandle(MCPRequest request)
+        {
+            return ValidateHandleSession(request);
+        }
+
+        private MCPResponse ValidateHandleSession(MCPRequest request)
         {
             string handleText = ExtractHandleText(request);
             if (string.IsNullOrEmpty(handleText)) return null;
@@ -1960,11 +2117,34 @@ components.Add(new ComponentInfo
         {
             if (instanceId >= 1000000 && ObjectRegistry.TryGet(instanceId, out object reg) && reg is UnityEngine.Object uo)
                 return uo;
-            foreach (var obj in Resources.FindObjectsOfTypeAll<UnityEngine.Object>())
+
+            // IL2CPP: FindObjectsOfTypeAll<T>() yields base-typed proxies.
+            // Search the concrete collections first, then re-wrap the winner so
+            // reflection on the real type (fields/properties) succeeds.
+            try
             {
-                if (obj != null && obj.GetInstanceID() == instanceId)
-                    return obj;
+                foreach (GameObject go in Resources.FindObjectsOfTypeAll<GameObject>())
+                {
+                    if (go != null && go.GetInstanceID() == instanceId) return go;
+                }
             }
+            catch { }
+            try
+            {
+                foreach (Component component in Resources.FindObjectsOfTypeAll<Component>())
+                {
+                    if (component != null && component.GetInstanceID() == instanceId) return ConcreteProxy(component);
+                }
+            }
+            catch { }
+            try
+            {
+                foreach (UnityEngine.Object obj in Resources.FindObjectsOfTypeAll<UnityEngine.Object>())
+                {
+                    if (obj != null && obj.GetInstanceID() == instanceId) return ConcreteProxy(obj);
+                }
+            }
+            catch { }
             return null;
         }
         

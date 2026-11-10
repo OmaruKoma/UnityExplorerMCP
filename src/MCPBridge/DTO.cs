@@ -131,6 +131,10 @@ namespace UnityExplorer.MCPBridge
         public string UnityVersion { get; set; }
         public string BridgeVersion { get; set; }
         public string SessionId { get; set; }
+        public int Pid { get; set; }
+        public int Port { get; set; }
+        public string Backend { get; set; }
+        public string Loader { get; set; }
     }
 
     public class SceneInfoResponse

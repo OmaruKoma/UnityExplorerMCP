@@ -16,7 +16,7 @@ namespace UnityExplorer.MCPBridge
     // Loader entry. Mirrors UnityExplorer's own MONO/CPP split:
     //  Mono   -> BaseUnityPlugin + Awake() + Logger
     //  IL2CPP -> BasePlugin + Load() + Log (+ ClassInjector for the behaviour)
-    [BepInPlugin("com.sinai.unityexplorer.mcpbridge", "UnityExplorer MCP Bridge", "1.2.0")]
+    [BepInPlugin("com.sinai.unityexplorer.mcpbridge", "UnityExplorer MCP Bridge", "1.3.0")]
     public class MCPBridgePlugin :
 #if MONO
         BaseUnityPlugin

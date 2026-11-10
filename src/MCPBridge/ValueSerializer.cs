@@ -84,10 +84,14 @@ namespace UnityExplorer.MCPBridge
     /// </summary>
     public static class ValueSerializer
     {
-        public static object Serialize(object value, string encoding = "hex")
+        public static object Serialize(object value, string encoding = "hex", bool trackReferences = true)
         {
             if (value == null) return null;
             Type t = value.GetType();
+
+            // IsPrimitive is true for IntPtr/UIntPtr, but JSON cannot carry them.
+            if (t == typeof(IntPtr) || t == typeof(UIntPtr))
+                return "<" + t.Name + ">";
 
             if (t == typeof(string))
             {
@@ -111,7 +115,7 @@ namespace UnityExplorer.MCPBridge
                 var items = new List<object>(take);
                 for (int i = 0; i < take; i++)
                 {
-                    try { items.Add(Serialize(list[i], encoding)); }
+                    try { items.Add(Serialize(list[i], encoding, trackReferences)); }
                     catch { items.Add("<unserializable>"); }
                 }
                 return new Dictionary<string, object>
@@ -150,7 +154,7 @@ namespace UnityExplorer.MCPBridge
                         var items = new List<object>(m);
                         for (int i = 0; i < m; i++)
                         {
-                            try { items.Add(Serialize(indexer.GetValue(value, new object[] { i }), encoding)); }
+                            try { items.Add(Serialize(indexer.GetValue(value, new object[] { i }), encoding, trackReferences)); }
                             catch { items.Add("<unserializable>"); }
                         }
                         return new Dictionary<string, object> { { "length", len }, { "items", items } };
@@ -170,7 +174,28 @@ namespace UnityExplorer.MCPBridge
                 };
             }
 
+            // Structs (Vector3, Rect, Matrix4x4, ...) are boxed copies: a registry
+            // id would change on every read and make snapshot diffs noisy.
+            if (t.IsValueType)
+            {
+                return new Dictionary<string, object>
+                {
+                    { "type", full },
+                    { "preview", SafePreview(value) }
+                };
+            }
+
             // Unknown reference type -> registry handle + preview string.
+            // Registry ids are per-read for wrappers (e.g. struct getters), so
+            // canonical snapshots opt out to keep diffs stable.
+            if (!trackReferences)
+            {
+                return new Dictionary<string, object>
+                {
+                    { "type", full },
+                    { "preview", SafePreview(value) }
+                };
+            }
             int rid = ObjectRegistry.Register(value);
             return new Dictionary<string, object>
             {
