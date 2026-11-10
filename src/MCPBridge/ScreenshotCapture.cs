@@ -317,7 +317,7 @@ namespace UnityExplorer.MCPBridge
                 try
                 {
                     if (component != null && SetEnabled(component, true))
-                        resumed.Add(component.GetType().Name);
+                        resumed.Add(ComponentTypeName(component));
                 }
                 catch { }
                 _pausedDrivers.RemoveAt(i);
