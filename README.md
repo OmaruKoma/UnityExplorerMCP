@@ -70,7 +70,7 @@ page; if none matches the version you need, build from source (Option B below).
 
 ## What's new in 1.3
 
-- **48 tools** (up from 24): snapshots/diff/undo, time-sliced instance scans, value search,
+- **49 tools** (up from 24): snapshots/diff/undo, time-sliced instance scans, value search,
   array paging, byte decoding, labels/aliases, PNG capture, activity log.
 - **Material dump and offscreen render** — `unity_dump_material` returns shader, keywords and
   every non-default property (textures report their names) in one call; `unity_render_object`
@@ -309,7 +309,7 @@ Then ask your agent to call `unity_capabilities`. If it answers, the whole chain
 
 ## Tools
 
-48 tools. Start every session with `unity_capabilities` — it reports backend, session, pid,
+49 tools. Start every session with `unity_capabilities` — it reports backend, session, pid,
 permissions, features, limits and marshalling support for the game you are attached to.
 
 **Session and discovery**
@@ -573,7 +573,7 @@ inspect first, change second; use snapshots/diff and `unity_undo_write` while ex
 
 ```powershell
 .\build.ps1 -Backend Server      # mcp-server only
-node test-tools.js               # 48 tools, annotations, batch guard (no game needed)
+node test-tools.js               # 49 tools, annotations, batch guard (no game needed)
 node test.js                     # live bridge tests (game running)
 $env:UNITY_BACKEND = "Mono"; node test.js
 node verify.js                   # repo integrity
