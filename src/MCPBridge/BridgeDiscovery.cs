@@ -39,7 +39,7 @@ namespace UnityExplorer.MCPBridge
                         { "pid", SafePid() },
                         { "port", port },
                         { "backend", BridgeConfig.Backend },
-                        { "loader", "BepInEx" },
+                        { "loader", BridgeConfig.LoaderName },
                         { "unity_version", SafeUnityVersion() },
                         { "session_id", SafeSession() },
                         { "bridge_version", "1.3.1" },

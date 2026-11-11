@@ -11,7 +11,7 @@
 #   MONO_REF_ROOT   : BepInEx Mono refs (install, game Managed/, or UnityExplorer lib/net35)
 
 param(
-    [ValidateSet("All", "IL2CPP", "Mono", "MonoBepInEx5", "Server")]
+    [ValidateSet("All", "IL2CPP", "Mono", "MonoBepInEx5", "MelonLoader", "MelonLoaderIL2CPP", "Server")]
     [string]$Backend = "All"
 )
 
@@ -40,6 +40,14 @@ if ($Backend -eq "MonoBepInEx5") {
     Invoke-BridgeBuild -Config "Release_Mono" -Label "Mono (BepInEx 5)" -ExtraArgs @("-p:BepInExMonoFlavor=BIE5", "-p:OutputPath=..\..\dist\mono-bepinex5\")
 }
 
+if ($Backend -eq "MelonLoader") {
+    Invoke-BridgeBuild -Config "Release_ML_Mono" -Label "MelonLoader (Mono)"
+}
+
+if ($Backend -eq "MelonLoaderIL2CPP") {
+    Invoke-BridgeBuild -Config "Release_ML_IL2CPP" -Label "MelonLoader (IL2CPP)"
+}
+
 if ($Backend -eq "All" -or $Backend -eq "Server") {
     Write-Host "Building MCP Server..." -ForegroundColor Green
     Push-Location "$RepoRoot\mcp-server"
@@ -66,6 +74,12 @@ if ($Backend -eq "All" -or $Backend -eq "Mono") {
 }
 if ($Backend -eq "MonoBepInEx5") {
     Write-Host "  Mono Bridge:   dist\mono-bepinex5\MCPBridge.Mono.dll (+ mcs.dll)"
+}
+if ($Backend -eq "MelonLoader") {
+    Write-Host "  MelonLoader:   dist\melonloader\MCPBridge.MelonLoader.dll (+ mcs.dll)"
+}
+if ($Backend -eq "MelonLoaderIL2CPP") {
+    Write-Host "  MelonLoader:   dist\melonloader-il2cpp\MCPBridge.MelonLoader.IL2CPP.dll (+ mcs.dll)"
 }
 if ($Backend -eq "All" -or $Backend -eq "Server") {
     Write-Host "  MCP Server:    mcp-server\dist\server.js"

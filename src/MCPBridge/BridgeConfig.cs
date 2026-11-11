@@ -122,6 +122,20 @@ namespace UnityExplorer.MCPBridge
 
         public static string ConfigDirectory()
         {
+#if ML
+            try
+            {
+                string data = Application.dataPath;
+                if (!string.IsNullOrEmpty(data))
+                {
+                    string root = Path.GetDirectoryName(data);
+                    if (!string.IsNullOrEmpty(root))
+                        return Path.Combine(root, "UserData");
+                }
+            }
+            catch { }
+            return Path.Combine(Directory.GetCurrentDirectory(), "UserData");
+#else
             try
             {
                 string data = Application.dataPath;
@@ -134,6 +148,19 @@ namespace UnityExplorer.MCPBridge
             }
             catch { }
             return Path.Combine(Path.Combine(Directory.GetCurrentDirectory(), "BepInEx"), "config");
+#endif
+        }
+
+        public static string LoaderName
+        {
+            get
+            {
+#if ML
+                return "MelonLoader";
+#else
+                return "BepInEx";
+#endif
+            }
         }
     }
 }

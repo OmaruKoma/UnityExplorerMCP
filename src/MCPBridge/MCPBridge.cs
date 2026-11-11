@@ -440,7 +440,7 @@ namespace UnityExplorer.MCPBridge
                     Pid = SafePid(),
                     Port = Port,
                     Backend = BridgeConfig.Backend,
-                    Loader = "BepInEx"
+                    Loader = BridgeConfig.LoaderName
                 }
             };
         }
@@ -1451,7 +1451,7 @@ components.Add(new ComponentInfo
                 Data = new Dictionary<string, object>
                 {
                     { "backend", BridgeConfig.Backend },
-                    { "loader", "BepInEx" },
+                    { "loader", BridgeConfig.LoaderName },
                     { "bepinex_version", bepinExVersion ?? "unknown" },
                     { "bridge_version", "1.3.1" },
                     { "unity_version", Application.unityVersion },

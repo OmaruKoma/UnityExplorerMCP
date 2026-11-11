@@ -5,7 +5,7 @@
 
 ## Requirements
 
-- A Unity game with **BepInEx 5 or 6** installed (IL2CPP or Mono)
+- A Unity game with **BepInEx 5/6** or **MelonLoader 0.6+** installed (IL2CPP or Mono)
 - **Node.js 18+** (MCP Server)
 - **.NET SDK** (building the C# bridge)
 
@@ -24,10 +24,12 @@ cd UnityExplorerMCP
 Build backends separately if needed:
 
 ```powershell
-.\build.ps1 -Backend IL2CPP        # dist/il2cpp/MCPBridge.IL2CPP.dll
-.\build.ps1 -Backend Mono          # dist/mono/MCPBridge.Mono.dll (BepInEx 6 Unity Mono)
-.\build.ps1 -Backend MonoBepInEx5  # dist/mono-bepinex5/MCPBridge.Mono.dll (BepInEx 5)
-.\build.ps1 -Backend Server        # mcp-server only
+.\build.ps1 -Backend IL2CPP            # dist/il2cpp/MCPBridge.IL2CPP.dll
+.\build.ps1 -Backend Mono              # dist/mono/MCPBridge.Mono.dll (BepInEx 6 Unity Mono)
+.\build.ps1 -Backend MonoBepInEx5      # dist/mono-bepinex5/MCPBridge.Mono.dll (BepInEx 5)
+.\build.ps1 -Backend MelonLoader       # dist/melonloader/MCPBridge.MelonLoader.dll (ML Mono)
+.\build.ps1 -Backend MelonLoaderIL2CPP # dist/melonloader-il2cpp/MCPBridge.MelonLoader.IL2CPP.dll
+.\build.ps1 -Backend Server            # mcp-server only
 ```
 
 Reference assemblies resolve from environment variables (no hardcoded paths):
@@ -36,6 +38,10 @@ Reference assemblies resolve from environment variables (no hardcoded paths):
 |---|---|---|
 | `UNITY_GAME_DIR` | IL2CPP game root with `BepInEx/` | — (required for IL2CPP builds) |
 | `MONO_REF_ROOT` | BepInEx Mono refs (`BepInEx/`, `UnityEngine.dll`, `mcs.dll`) | `UnityExplorer/lib/net35` (sibling checkout) |
+| `ML_MONO_REF_ROOT` | Mono game's `<Game>_Data/Managed` folder | — (required for ML Mono) |
+| `ML_MONO_LOADER_DIR` | Game's `MelonLoader/net35` folder | — (required for ML Mono) |
+| `ML_IL2CPP_REF_ROOT` | Game's `MelonLoader/Il2CppAssemblies` folder | — (required for ML IL2CPP) |
+| `ML_IL2CPP_LOADER_DIR` | Game's `MelonLoader/net6` folder | — (required for ML IL2CPP) |
 
 Example:
 
@@ -53,6 +59,8 @@ Copy **both** files (the C# engine `mcs.dll` is required for `execute_csharp`):
 | IL2CPP (BepInEx 6) | `dist/il2cpp/` | `<GAME_ROOT>/BepInEx/plugins/` |
 | Mono (BepInEx 6 Unity Mono) | `dist/mono/` | `<GAME_ROOT>/BepInEx/plugins/` |
 | Mono (BepInEx 5) | `dist/mono-bepinex5/` | `<GAME_ROOT>/BepInEx/plugins/` |
+| IL2CPP (MelonLoader) | `dist/melonloader-il2cpp/` | `<GAME_ROOT>/Mods/` |
+| Mono (MelonLoader) | `dist/melonloader/` | `<GAME_ROOT>/Mods/` |
 
 ```powershell
 Copy-Item "dist\mono-bepinex5\MCPBridge.Mono.dll", "dist\mono-bepinex5\mcs.dll" "<GAME_ROOT>\BepInEx\plugins\"
@@ -99,7 +107,7 @@ README configuration table for the full list.
 
 ## Step 4: Run
 
-1. Start the Unity game (BepInEx + MCP Bridge loaded)
+1. Start the Unity game (BepInEx or MelonLoader, with the MCP Bridge loaded)
 2. Start your MCP client (it launches `mcp-server/dist/server.js` via stdio)
 3. In the agent, start with `unity_capabilities`, then explore
 
@@ -124,7 +132,8 @@ node test.js
 
 - The DLL must match the loader: BepInEx 5 games need the `mono-bepinex5` build
   (a BepInEx 6 build is silently skipped by the BepInEx 5 chainloader — check the
-  plugin count in the log).
+  plugin count in the log). MelonLoader games load from `Mods/` and log to
+  `MelonLoader/Latest.log`; use `melonloader` (Mono) or `melonloader-il2cpp`.
 - `mcs.dll` must sit next to the bridge DLL or `execute_csharp` is unavailable.
 
 ### Requests time out while the game loads

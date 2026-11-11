@@ -155,31 +155,31 @@ unity_tail_log              { "lines": 50 }                      → 看接下�
 
 ## 支持的 Runtime
 
-| 功能 | IL2CPP (BepInEx 6) | Mono (BepInEx 5) | Mono (BepInEx 6) |
-|---|---|---|---|
-| 运行时检视 | ✅ 真机测过 | ✅ 真机测过 | 仅编译 |
-| 反射 / 类型发现 | ✅ | ✅ | 仅编译 |
-| 字段 / 属性读写 | ✅ | ✅ | 仅编译 |
-| 方法调用（含 `out`/`ref`） | ✅ | ✅ | 仅编译 |
-| 静态调用 + 静态字段读写 | ✅ | ✅ | 仅编译 |
-| C# 执行 | ✅ | ✅ | 仅编译 |
-| 对象句柄 + Session | ✅ | ✅ | 仅编译 |
-| 能力发现 / 分页 / 截断 | ✅ | ✅ | 仅编译 |
-| Hook 清单（只读） | ✅ | ✅ | 仅编译 |
-| 快照 / 差异 / 撤销 | ✅ | ✅ | 仅编译 |
-| 实例扫描 / 按值搜索 | ✅ | ✅ | 仅编译 |
-| 数组 / 字节解码 / 标签 | ✅ | ✅ | 仅编译 |
-| 方法追踪（安装 hook） | ❌（仅 Mono） | ✅ 需要 Harmony | 仅编译 |
-| PNG 截图 | ✅（反射实现） | ✅（反射实现） | 仅编译 |
-| 日志尾部 | ✅（Server 侧） | ✅（Server 侧） | ✅（Server 侧） |
+| 功能 | IL2CPP (BepInEx 6) | Mono (BepInEx 5) | Mono (BepInEx 6) | IL2CPP (MelonLoader) | Mono (MelonLoader) |
+|---|---|---|---|---|---|
+| 运行时检视 | ✅ 真机测过 | ✅ 真机测过 | 仅编译 | ✅ 真机测过 | 仅编译 |
+| 反射 / 类型发现 | ✅ | ✅ | 仅编译 | 仅编译 | 仅编译 |
+| 字段 / 属性读写 | ✅ | ✅ | 仅编译 | 仅编译 | 仅编译 |
+| 方法调用（含 `out`/`ref`） | ✅ | ✅ | 仅编译 | 仅编译 | 仅编译 |
+| 静态调用 + 静态字段读写 | ✅ | ✅ | 仅编译 | 仅编译 | 仅编译 |
+| C# 执行 | ✅ | ✅ | 仅编译 | ✅ 真机测过 | 仅编译 |
+| 对象句柄 + Session | ✅ | ✅ | 仅编译 | ✅ 真机测过 | 仅编译 |
+| 能力发现 / 分页 / 截断 | ✅ | ✅ | 仅编译 | ✅ 真机测过 | 仅编译 |
+| Hook 清单（只读） | ✅ | ✅ | 仅编译 | 仅编译 | 仅编译 |
+| 快照 / 差异 / 撤销 | ✅ | ✅ | 仅编译 | 仅编译 | 仅编译 |
+| 实例扫描 / 按值搜索 | ✅ | ✅ | 仅编译 | 仅编译 | 仅编译 |
+| 数组 / 字节解码 / 标签 | ✅ | ✅ | 仅编译 | 仅编译 | 仅编译 |
+| 方法追踪（安装 hook） | ❌（仅 Mono） | ✅ 需要 Harmony | 仅编译 | ❌（仅 Mono） | 仅编译 |
+| PNG 截图 | ✅（反射实现） | ✅（反射实现） | 仅编译 | ✅ 真机测过 | 仅编译 |
+| 日志尾部 | ✅（Server 侧） | ✅（Server 侧） | ✅（Server 侧） | ✅（Server 侧） | ✅（Server 侧） |
 
-已在 Unity 2022.3（IL2CPP、BepInEx 6）与 Unity 2019.4（Mono、BepInEx 5.4）真机验证。
-BepInEx 6 Mono 与主干同源编译，但暂无真机运行时；如有运行时差异，以 `unity_capabilities`
-的实时返回为准，不做假设。
+已在 Unity 2022.3（IL2CPP、BepInEx 6）、Unity 2019.4（Mono、BepInEx 5.4）与 Unity 2019.4
+（IL2CPP、MelonLoader 0.7.1：场景/层级、C# 执行、能力发现、PNG 截图）真机验证。标“仅编译”的
+组合与主干同源编译，但暂无真机运行时；如有运行时差异，以 `unity_capabilities` 的实时返回为准。
 
 ## 环境要求
 
-- 装好 **BepInEx 5 或 6**（IL2CPP 或 Mono）的 Unity 游戏
+- 装好 **BepInEx 5/6** 或 **MelonLoader 0.6+**（IL2CPP 或 Mono）的 Unity 游戏
 - **Node.js 18+** —— MCP Server
 - **.NET SDK** —— 仅在自行编译 C# 桥时需要
 
@@ -196,14 +196,18 @@ BepInEx 6 Mono 与主干同源编译，但暂无真机运行时；如有运行�
    | `UnityExplorerMCP-1.3.1-IL2CPP.zip` | BepInEx 6 + IL2CPP 游戏 |
    | `UnityExplorerMCP-1.3.1-Mono-BepInEx6.zip` | BepInEx 6 + Mono（Unity Mono）游戏 |
    | `UnityExplorerMCP-1.3.1-Mono-BepInEx5.zip` | BepInEx 5 + Mono 游戏 |
+   | `UnityExplorerMCP-1.3.1-MelonLoader-IL2CPP.zip` | MelonLoader + IL2CPP 游戏 |
+   | `UnityExplorerMCP-1.3.1-MelonLoader-Mono.zip` | MelonLoader + Mono 游戏 |
 
-2. 解压到 `<GAME_ROOT>/BepInEx/plugins/`。压缩包内是桥 DLL 与 `mcs.dll`
-   （`unity_execute_csharp` 必需），两者必须放在同一目录。
+2. 解压到对应加载器的目录：BepInEx 用 `<GAME_ROOT>/BepInEx/plugins/`，MelonLoader 用
+   `<GAME_ROOT>/Mods/`。压缩包内是桥 DLL 与 `mcs.dll`（`unity_execute_csharp` 必需），
+   两者必须放在同一目录。
 
-3. 启动游戏，在 `BepInEx/LogOutput.log` 中确认：
+3. 启动游戏，在 `BepInEx/LogOutput.log`（BepInEx）或 `MelonLoader/Latest.log`（MelonLoader）中确认：
 
    ```text
-   MCP Bridge plugin loaded (IL2CPP backend)
+   MCP Bridge plugin loaded (IL2CPP backend)                    # BepInEx
+   [UnityExplorer MCP Bridge] MCP Bridge started on port 12345  # MelonLoader
    ```
 
 4. 用 `unity-explorer-mcp-server-1.3.1.zip` 部署 Server：
@@ -224,10 +228,12 @@ cd UnityExplorerMCP
 ```
 
 ```powershell
-.\build.ps1 -Backend IL2CPP       # dist/il2cpp/MCPBridge.IL2CPP.dll
-.\build.ps1 -Backend Mono         # dist/mono/MCPBridge.Mono.dll          （BepInEx 6 Unity Mono）
-.\build.ps1 -Backend MonoBepInEx5 # dist/mono-bepinex5/MCPBridge.Mono.dll （BepInEx 5）
-.\build.ps1 -Backend Server       # 只编 mcp-server
+.\build.ps1 -Backend IL2CPP            # dist/il2cpp/MCPBridge.IL2CPP.dll
+.\build.ps1 -Backend Mono              # dist/mono/MCPBridge.Mono.dll          （BepInEx 6 Unity Mono）
+.\build.ps1 -Backend MonoBepInEx5      # dist/mono-bepinex5/MCPBridge.Mono.dll （BepInEx 5）
+.\build.ps1 -Backend MelonLoader       # dist/melonloader/MCPBridge.MelonLoader.dll （ML Mono）
+.\build.ps1 -Backend MelonLoaderIL2CPP # dist/melonloader-il2cpp/MCPBridge.MelonLoader.IL2CPP.dll
+.\build.ps1 -Backend Server            # 只编 mcp-server
 ```
 
 编译期引用一律来自环境变量，仓库不含任何本机路径：
@@ -236,6 +242,10 @@ cd UnityExplorerMCP
 |---|---|---|
 | `UNITY_GAME_DIR` | IL2CPP 构建 | 含 `BepInEx/` 的游戏根目录（interop + core 程序集） |
 | `MONO_REF_ROOT` | Mono 构建 | BepInEx Mono 引用：`BepInEx/`、`UnityEngine.dll`、`mcs.dll` |
+| `ML_MONO_REF_ROOT` | MelonLoader Mono | Mono 游戏的 `<Game>_Data/Managed` 目录 |
+| `ML_MONO_LOADER_DIR` | MelonLoader Mono | 游戏的 `MelonLoader/net35` 目录 |
+| `ML_IL2CPP_REF_ROOT` | MelonLoader IL2CPP | 游戏的 `MelonLoader/Il2CppAssemblies` 目录 |
+| `ML_IL2CPP_LOADER_DIR` | MelonLoader IL2CPP | 游戏的 `MelonLoader/net6` 目录 |
 
 完整说明（含 BepInEx 5 变体）见 [INSTALL.md](INSTALL.md)。
 
@@ -384,7 +394,8 @@ Cinemachine 类驱动，否则它们每帧在 `LateUpdate` 里把 transform 改�
 对象身份用 session 感知句柄（`Shop#1:-33814`）。写操作与调用会校验 session——切场景或重启后，
 用 `unity_resolve_path` 或查找类工具重新解析；桥会返回 `STALE_HANDLE`，而不是误改别的对象。
 
-权限在**游戏内**执行（`BepInEx/config/UnityExplorerMCP.cfg` 或 `MCP_ALLOW_*`）：
+权限在**游戏内**执行（`BepInEx/config/UnityExplorerMCP.cfg`，MelonLoader 下为
+`UserData/UnityExplorerMCP.cfg`，或 `MCP_ALLOW_*`）：
 `write`、`invoke`、`execute`、`trace` 可单独关闭，或整体 `preset=read-only`。
 MCP Server 无法通过参数给自己提权。
 
@@ -466,9 +477,10 @@ unity_decode_byte_array { handle, member: "packet", format: "msgpack" }
 | `MCP_OUTPUT_LIMIT` | `8192` | 字符串截断阈值（桥） |
 | `MCP_BYTE_LIMIT` | `32768` | 字节截断阈值（桥） |
 
-游戏内设置也可写在 `BepInEx/config/UnityExplorerMCP.cfg`（INI 风格
+游戏内设置也可写在 `BepInEx/config/UnityExplorerMCP.cfg`（MelonLoader 下为
+`UserData/UnityExplorerMCP.cfg`），INI 风格
 `key=value`：`preset`、`allow_write`、`allow_invoke`、`allow_execute`、`allow_trace`、
-`mcp_bridge_port`、`discovery`、`audit`）。环境变量优先。标签保存在同目录的
+`mcp_bridge_port`、`discovery`、`audit`。环境变量优先。标签保存在同目录的
 `UnityExplorerMCP.labels.json`。
 
 ## 协议
@@ -518,7 +530,8 @@ curl -s http://127.0.0.1:12345/ -H "Content-Type: application/json" \
   原生代码执行不在 MCP 面内。
 - 无输入模拟（那是 Editor MCP 的地盘）。
 - 截图编码走反射（Unity 各版本模块可用性不同）；少数运行时只有两条编码路径中的一条。
-- MelonLoader 构建在 `#if ML` 之后，本阶段不产出也不文档化。
+- MelonLoader IL2CPP 已在 0.7.1（Unity 2019.4）真机验证场景/层级、能力发现、C# 执行与
+  PNG 截图；MelonLoader Mono 能编译，但暂无真机运行时。
 - BepInEx 6 Mono 可编译，暂无真机测试。
 
 ## 安全

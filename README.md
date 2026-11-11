@@ -164,31 +164,32 @@ truncated (`truncated`/`length`/`sha256`/`head`/`tail`), and errors are structur
 
 ## Supported runtimes
 
-| Feature | IL2CPP (BepInEx 6) | Mono (BepInEx 5) | Mono (BepInEx 6) |
-|---|---|---|---|
-| Runtime inspection | ✅ live-tested | ✅ live-tested | build only |
-| Reflection / type discovery | ✅ | ✅ | build only |
-| Field / property access | ✅ | ✅ | build only |
-| Method invocation (incl. `out`/`ref`) | ✅ | ✅ | build only |
-| Static invocation + static field access | ✅ | ✅ | build only |
-| C# execution | ✅ | ✅ | build only |
-| Object handles + sessions | ✅ | ✅ | build only |
-| Capabilities / pagination / truncation | ✅ | ✅ | build only |
-| Harmony hook inventory (read-only) | ✅ | ✅ | build only |
-| Snapshots / diff / undo | ✅ | ✅ | build only |
-| Instance scans / value search | ✅ | ✅ | build only |
-| Arrays / byte decode / labels | ✅ | ✅ | build only |
-| Method tracing (installs hooks) | ❌ (Mono-only) | ✅ requires Harmony | build only |
-| PNG screenshot | ✅ (reflection-based) | ✅ (reflection-based) | build only |
-| Log tail | ✅ (server-side) | ✅ (server-side) | ✅ (server-side) |
+| Feature | IL2CPP (BepInEx 6) | Mono (BepInEx 5) | Mono (BepInEx 6) | IL2CPP (MelonLoader) | Mono (MelonLoader) |
+|---|---|---|---|---|---|
+| Runtime inspection | ✅ live-tested | ✅ live-tested | build only | ✅ live-tested | build only |
+| Reflection / type discovery | ✅ | ✅ | build only | build only | build only |
+| Field / property access | ✅ | ✅ | build only | build only | build only |
+| Method invocation (incl. `out`/`ref`) | ✅ | ✅ | build only | build only | build only |
+| Static invocation + static field access | ✅ | ✅ | build only | build only | build only |
+| C# execution | ✅ | ✅ | build only | ✅ live-tested | build only |
+| Object handles + sessions | ✅ | ✅ | build only | ✅ live-tested | build only |
+| Capabilities / pagination / truncation | ✅ | ✅ | build only | ✅ live-tested | build only |
+| Harmony hook inventory (read-only) | ✅ | ✅ | build only | build only | build only |
+| Snapshots / diff / undo | ✅ | ✅ | build only | build only | build only |
+| Instance scans / value search | ✅ | ✅ | build only | build only | build only |
+| Arrays / byte decode / labels | ✅ | ✅ | build only | build only | build only |
+| Method tracing (installs hooks) | ❌ (Mono-only) | ✅ requires Harmony | build only | ❌ (Mono-only) | build only |
+| PNG screenshot | ✅ (reflection-based) | ✅ (reflection-based) | build only | ✅ live-tested | build only |
+| Log tail | ✅ (server-side) | ✅ (server-side) | ✅ (server-side) | ✅ (server-side) | ✅ (server-side) |
 
-Live-tested on Unity 2022.3 (IL2CPP, BepInEx 6) and Unity 2019.4 (Mono, BepInEx 5.4).
-The BepInEx 6 Mono build comes from the same sources but has no live runtime test yet — any
-runtime difference is reported truthfully by `unity_capabilities`, never assumed.
+Live-tested on Unity 2022.3 (IL2CPP, BepInEx 6), Unity 2019.4 (Mono, BepInEx 5.4) and
+Unity 2019.4 (IL2CPP, MelonLoader 0.7.1: scene/hierarchy, C# execution, capabilities and PNG
+capture). Rows marked "build only" compile from the same sources but have no live runtime test —
+any runtime difference is reported truthfully by `unity_capabilities`, never assumed.
 
 ## Requirements
 
-- A Unity game with **BepInEx 5 or 6** (IL2CPP or Mono)
+- A Unity game with **BepInEx 5/6** or **MelonLoader 0.6+** (IL2CPP or Mono)
 - **Node.js 18+** — MCP server
 - **.NET SDK** — only if you build the C# bridge yourself
 
@@ -205,14 +206,19 @@ UnityExplorer itself is **not** required at runtime.
    | `UnityExplorerMCP-1.3.1-IL2CPP.zip` | IL2CPP games on BepInEx 6 |
    | `UnityExplorerMCP-1.3.1-Mono-BepInEx6.zip` | Mono games on BepInEx 6 (Unity Mono) |
    | `UnityExplorerMCP-1.3.1-Mono-BepInEx5.zip` | Mono games on BepInEx 5 |
+   | `UnityExplorerMCP-1.3.1-MelonLoader-IL2CPP.zip` | IL2CPP games on MelonLoader |
+   | `UnityExplorerMCP-1.3.1-MelonLoader-Mono.zip` | Mono games on MelonLoader |
 
-2. Extract the zip into `<GAME_ROOT>/BepInEx/plugins/`. It contains the bridge DLL and `mcs.dll`
-   (required for `unity_execute_csharp`), which must stay side by side.
+2. Extract the zip into the loader's mod folder: `<GAME_ROOT>/BepInEx/plugins/` for BepInEx,
+   `<GAME_ROOT>/Mods/` for MelonLoader. It contains the bridge DLL and `mcs.dll` (required for
+   `unity_execute_csharp`), which must stay side by side.
 
-3. Start the game and confirm in `BepInEx/LogOutput.log`:
+3. Start the game and confirm in `BepInEx/LogOutput.log` (BepInEx) or
+   `MelonLoader/Latest.log` (MelonLoader):
 
    ```text
-   MCP Bridge plugin loaded (IL2CPP backend)
+   MCP Bridge plugin loaded (IL2CPP backend)                    # BepInEx
+   [UnityExplorer MCP Bridge] MCP Bridge started on port 12345  # MelonLoader
    ```
 
 4. Set up the server from `unity-explorer-mcp-server-1.3.1.zip`:
@@ -233,10 +239,12 @@ cd UnityExplorerMCP
 ```
 
 ```powershell
-.\build.ps1 -Backend IL2CPP       # dist/il2cpp/MCPBridge.IL2CPP.dll
-.\build.ps1 -Backend Mono         # dist/mono/MCPBridge.Mono.dll        (BepInEx 6 Unity Mono)
-.\build.ps1 -Backend MonoBepInEx5 # dist/mono-bepinex5/MCPBridge.Mono.dll (BepInEx 5)
-.\build.ps1 -Backend Server       # mcp-server only
+.\build.ps1 -Backend IL2CPP            # dist/il2cpp/MCPBridge.IL2CPP.dll
+.\build.ps1 -Backend Mono              # dist/mono/MCPBridge.Mono.dll        (BepInEx 6 Unity Mono)
+.\build.ps1 -Backend MonoBepInEx5      # dist/mono-bepinex5/MCPBridge.Mono.dll (BepInEx 5)
+.\build.ps1 -Backend MelonLoader       # dist/melonloader/MCPBridge.MelonLoader.dll (ML Mono)
+.\build.ps1 -Backend MelonLoaderIL2CPP # dist/melonloader-il2cpp/MCPBridge.MelonLoader.IL2CPP.dll
+.\build.ps1 -Backend Server            # mcp-server only
 ```
 
 Build references come from environment variables, never from committed machine paths:
@@ -245,6 +253,10 @@ Build references come from environment variables, never from committed machine p
 |---|---|---|
 | `UNITY_GAME_DIR` | IL2CPP build | Game root containing `BepInEx/` (interop + core assemblies) |
 | `MONO_REF_ROOT` | Mono build | BepInEx Mono refs: `BepInEx/`, `UnityEngine.dll`, `mcs.dll` |
+| `ML_MONO_REF_ROOT` | MelonLoader Mono | Mono game's `<Game>_Data/Managed` folder |
+| `ML_MONO_LOADER_DIR` | MelonLoader Mono | Game's `MelonLoader/net35` folder |
+| `ML_IL2CPP_REF_ROOT` | MelonLoader IL2CPP | Game's `MelonLoader/Il2CppAssemblies` folder |
+| `ML_IL2CPP_LOADER_DIR` | MelonLoader IL2CPP | Game's `MelonLoader/net6` folder |
 
 See [INSTALL.md](INSTALL.md) for the long version, including the BepInEx 5 flavor.
 
@@ -400,7 +412,8 @@ Object identity uses session-aware handles (`Shop#1:-33814`). Writes and invocat
 session — after a scene change or restart, re-resolve with `unity_resolve_path` or a find call;
 the bridge answers `STALE_HANDLE` instead of touching an unrelated object.
 
-Permissions are enforced **inside the game** (`BepInEx/config/UnityExplorerMCP.cfg` or
+Permissions are enforced **inside the game** (`BepInEx/config/UnityExplorerMCP.cfg`, or
+`UserData/UnityExplorerMCP.cfg` under MelonLoader, or
 `MCP_ALLOW_*`): `write`, `invoke`, `execute` and `trace` can be disabled individually, or the
 whole bridge pinned to `preset=read-only`. The server cannot grant itself more access.
 
@@ -483,9 +496,10 @@ patch state. The finished mod does not depend on this project.
 | `MCP_OUTPUT_LIMIT` | `8192` | Max string characters before truncation (bridge) |
 | `MCP_BYTE_LIMIT` | `32768` | Max raw bytes before truncation (bridge) |
 
-In-game settings can also live in `BepInEx/config/UnityExplorerMCP.cfg` (INI-style
+In-game settings can also live in `BepInEx/config/UnityExplorerMCP.cfg` (or
+`UserData/UnityExplorerMCP.cfg` under MelonLoader), as INI-style
 `key=value`: `preset`, `allow_write`, `allow_invoke`, `allow_execute`, `allow_trace`,
-`mcp_bridge_port`, `discovery`, `audit`). Environment variables win. Labels are stored in
+`mcp_bridge_port`, `discovery`, `audit`. Environment variables win. Labels are stored in
 `UnityExplorerMCP.labels.json` next to that config.
 
 ## Protocol
@@ -541,7 +555,9 @@ stdio MCP can use the bridge through the bundled Node server; direct HTTP is for
 - No input simulation (Editor-MCP territory).
 - Screenshot encoding is reflection-based because Unity module availability differs across
   versions; a few runtimes only expose `EncodeToPNG` through one of the two paths.
-- MelonLoader builds behind `#if ML` are not produced or documented in this phase.
+- MelonLoader IL2CPP was live-tested on 0.7.1 (Unity 2019.4) for scene/hierarchy inspection,
+  capabilities, C# execution and PNG screenshots; the MelonLoader Mono build compiles but has no
+  live runtime test yet.
 - BepInEx 6 Mono builds but has no live runtime test yet.
 
 ## Security

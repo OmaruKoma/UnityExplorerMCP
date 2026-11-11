@@ -1,9 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!--
-    UnityExplorerMCP dual-backend build.
+    UnityExplorerMCP multi-loader build.
     Configurations:
-      Release_IL2CPP : net6  BepInEx 6 IL2CPP  -> dist/il2cpp/MCPBridge.IL2CPP.dll
-      Release_Mono   : net35 BepInEx 6 Unity Mono (BIPUNITY) -> dist/mono/MCPBridge.Mono.dll
+      Release_IL2CPP        : net6  BepInEx 6 IL2CPP  -> dist/il2cpp/MCPBridge.IL2CPP.dll
+      Release_Mono          : net35 BepInEx 6 Unity Mono (BIPUNITY) -> dist/mono/MCPBridge.Mono.dll
+      Release_ML_Mono       : net35 MelonLoader (Mono)  -> dist/melonloader/MCPBridge.MelonLoader.dll
+      Release_ML_IL2CPP     : net6  MelonLoader (IL2CPP) -> dist/melonloader-il2cpp/MCPBridge.MelonLoader.IL2CPP.dll
 
     No machine-specific paths are committed. Reference locations resolve in order:
       1. MSBuild property  (dotnet build -p:UnityGameDir="&lt;game root&gt;" ...)
@@ -21,9 +23,17 @@
       BepInExMonoDir : default $(MonoRefRoot)/BepInEx/build647+
       BepInEx 5 users: -p:BepInExMonoFlavor=BIE5 and point MonoRefRoot at a dir
                        containing BepInEx/BepInEx.dll + UnityEngine.dll (BepInEx.Unity ref is skipped).
+
+    MelonLoader reference files:
+      ML_MONO_REF_ROOT     : Mono game's Managed/ folder (UnityEngine.dll, UnityEngine.UI.dll)
+      ML_MONO_LOADER_DIR   : game's MelonLoader/net35 (MelonLoader.dll)
+      ML_IL2CPP_REF_ROOT   : game's MelonLoader/Il2CppAssemblies
+      ML_IL2CPP_LOADER_DIR : game's MelonLoader/net6 (MelonLoader.dll, Il2CppInterop.Runtime.dll)
+      ML_MCS_MONO_REF      : net35 mcs.dll (default ../../UnityExplorer/lib/net35/mcs.dll)
+      ML_MCS_IL2CPP_REF    : net6  mcs.dll (default ../../UnityExplorer/lib/net6/mcs.dll)
   -->
   <PropertyGroup>
-    <Configurations>Release_IL2CPP;Release_Mono</Configurations>
+    <Configurations>Release_IL2CPP;Release_Mono;Release_ML_Mono;Release_ML_IL2CPP</Configurations>
     <Configuration Condition="'$(Configuration)'==''">Release_IL2CPP</Configuration>
     <OutputType>Library</OutputType>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
@@ -52,6 +62,33 @@
     <AssemblyName>MCPBridge.Mono</AssemblyName>
     <OutputPath>..\..\dist\mono\</OutputPath>
   </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)'=='Release_ML_Mono'">
+    <TargetFramework>net35</TargetFramework>
+    <DefineConstants>MONO;ML</DefineConstants>
+    <AssemblyName>MCPBridge.MelonLoader</AssemblyName>
+    <OutputPath>..\..\dist\melonloader\</OutputPath>
+    <MonoRefRoot Condition="'$(MonoRefRoot)'==''">$(ML_MONO_REF_ROOT)</MonoRefRoot>
+    <MelonLoaderMonoDir Condition="'$(MelonLoaderMonoDir)'==''">$(ML_MONO_LOADER_DIR)</MelonLoaderMonoDir>
+    <McsMonoRef Condition="'$(McsMonoRef)'==''">$(ML_MCS_MONO_REF)</McsMonoRef>
+    <McsMonoRef Condition="'$(McsMonoRef)'==''">$(MSBuildProjectDirectory)/../../UnityExplorer/lib/net35/mcs.dll</McsMonoRef>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)'=='Release_ML_IL2CPP'">
+    <TargetFramework>net6</TargetFramework>
+    <DefineConstants>CPP;ML;INTEROP</DefineConstants>
+    <AssemblyName>MCPBridge.MelonLoader.IL2CPP</AssemblyName>
+    <OutputPath>..\..\dist\melonloader-il2cpp\</OutputPath>
+    <Il2CppInteropDir Condition="'$(Il2CppInteropDir)'==''">$(ML_IL2CPP_REF_ROOT)</Il2CppInteropDir>
+    <MelonLoaderIl2CppDir Condition="'$(MelonLoaderIl2CppDir)'==''">$(ML_IL2CPP_LOADER_DIR)</MelonLoaderIl2CppDir>
+    <McsIl2CppRef Condition="'$(McsIl2CppRef)'==''">$(ML_MCS_IL2CPP_REF)</McsIl2CppRef>
+    <McsIl2CppRef Condition="'$(McsIl2CppRef)'==''">$(MSBuildProjectDirectory)/../../UnityExplorer/lib/net6/mcs.dll</McsIl2CppRef>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(Configuration)'=='Release_ML_Mono' or '$(Configuration)'=='Release_ML_IL2CPP'">
+    <!-- BepInEx entry point is replaced by MCPBridgeMod.cs under ML. -->
+    <Compile Remove="MCPBridgePlugin.cs" />
+  </ItemGroup>
 
   <!-- IL2CPP reference locations (game install, never committed) -->
   <PropertyGroup Condition="'$(Configuration)'=='Release_IL2CPP'">
@@ -85,6 +122,20 @@
            Text="BepInEx Mono references not found. Set MONO_REF_ROOT (or MonoRefRoot/BepInExMonoDir) to a BepInEx 6 Unity Mono install or the UnityExplorer lib/net35 folder." />
     <Error Condition="!Exists('$(MonoRefRoot)/UnityEngine.dll')"
            Text="Managed UnityEngine.dll not found in '$(MonoRefRoot)'. Mono builds need the game's Managed/ folder or UnityExplorer lib/net35." />
+  </Target>
+
+  <Target Name="CheckMelonLoaderMonoRefs" BeforeTargets="BeforeBuild" Condition="'$(Configuration)'=='Release_ML_Mono'">
+    <Error Condition="'$(MonoRefRoot)'=='' or !Exists('$(MonoRefRoot)/UnityEngine.dll')"
+           Text="UnityEngine.dll not found. Set ML_MONO_REF_ROOT to the Mono game's &lt;Game&gt;_Data/Managed folder." />
+    <Error Condition="'$(MelonLoaderMonoDir)'=='' or !Exists('$(MelonLoaderMonoDir)/MelonLoader.dll')"
+           Text="MelonLoader.dll not found. Set ML_MONO_LOADER_DIR to the game's MelonLoader/net35 folder." />
+  </Target>
+
+  <Target Name="CheckMelonLoaderIl2CppRefs" BeforeTargets="BeforeBuild" Condition="'$(Configuration)'=='Release_ML_IL2CPP'">
+    <Error Condition="'$(Il2CppInteropDir)'=='' or !Exists('$(Il2CppInteropDir)/Il2Cppmscorlib.dll')"
+           Text="MelonLoader IL2CPP assemblies not found. Set ML_IL2CPP_REF_ROOT to the game's MelonLoader/Il2CppAssemblies folder." />
+    <Error Condition="'$(MelonLoaderIl2CppDir)'=='' or !Exists('$(MelonLoaderIl2CppDir)/MelonLoader.dll')"
+           Text="MelonLoader.dll not found. Set ML_IL2CPP_LOADER_DIR to the game's MelonLoader/net6 folder." />
   </Target>
 
   <ItemGroup Condition="'$(Configuration)'=='Release_IL2CPP'">
@@ -167,6 +218,93 @@
     </Reference>
     <Reference Include="mcs">
       <HintPath>$(McsMonoRef)</HintPath>
+      <Private>True</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(Configuration)'=='Release_ML_Mono'">
+    <Reference Include="MelonLoader">
+      <HintPath>$(MelonLoaderMonoDir)/MelonLoader.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(MonoRefRoot)/UnityEngine.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <!-- Unity 2019+ splits UnityEngine into modules; older games keep one DLL. -->
+    <Reference Include="UnityEngine.CoreModule" Condition="Exists('$(MonoRefRoot)/UnityEngine.CoreModule.dll')">
+      <HintPath>$(MonoRefRoot)/UnityEngine.CoreModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.PhysicsModule" Condition="Exists('$(MonoRefRoot)/UnityEngine.PhysicsModule.dll')">
+      <HintPath>$(MonoRefRoot)/UnityEngine.PhysicsModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.TextRenderingModule" Condition="Exists('$(MonoRefRoot)/UnityEngine.TextRenderingModule.dll')">
+      <HintPath>$(MonoRefRoot)/UnityEngine.TextRenderingModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UIModule" Condition="Exists('$(MonoRefRoot)/UnityEngine.UIModule.dll')">
+      <HintPath>$(MonoRefRoot)/UnityEngine.UIModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.IMGUIModule" Condition="Exists('$(MonoRefRoot)/UnityEngine.IMGUIModule.dll')">
+      <HintPath>$(MonoRefRoot)/UnityEngine.IMGUIModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UI">
+      <HintPath>$(MonoRefRoot)/UnityEngine.UI.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="mcs">
+      <HintPath>$(McsMonoRef)</HintPath>
+      <Private>True</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(Configuration)'=='Release_ML_IL2CPP'">
+    <Reference Include="MelonLoader">
+      <HintPath>$(MelonLoaderIl2CppDir)/MelonLoader.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Il2CppInterop.Runtime">
+      <HintPath>$(MelonLoaderIl2CppDir)/Il2CppInterop.Runtime.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Il2Cppmscorlib">
+      <HintPath>$(Il2CppInteropDir)/Il2Cppmscorlib.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(Il2CppInteropDir)/UnityEngine.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(Il2CppInteropDir)/UnityEngine.CoreModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.PhysicsModule">
+      <HintPath>$(Il2CppInteropDir)/UnityEngine.PhysicsModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.TextRenderingModule">
+      <HintPath>$(Il2CppInteropDir)/UnityEngine.TextRenderingModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UI">
+      <HintPath>$(Il2CppInteropDir)/UnityEngine.UI.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UIModule">
+      <HintPath>$(Il2CppInteropDir)/UnityEngine.UIModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.IMGUIModule">
+      <HintPath>$(Il2CppInteropDir)/UnityEngine.IMGUIModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="mcs">
+      <HintPath>$(McsIl2CppRef)</HintPath>
       <Private>True</Private>
     </Reference>
   </ItemGroup>
